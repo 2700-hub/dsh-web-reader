@@ -36,6 +36,11 @@
 **约束**：提取与定位必须用同一套文本。高亮、行定位都基于 `collectBlocks` 的结果，
 不要在别处另算一份。
 
+**跨文档（同源 iframe）**：ThoughtDAG 的画布在 `/thoughtdag/` iframe 里。
+脚本只在顶层文档注入面板，但 `attachFrames()` 会把监听挂到同源 iframe 的 `contentDocument` 上。
+因此所有取点/选区/高亮的函数都接受一个 `doc` 参数（默认 `document`），
+不能用全局 `document`——覆盖层也要建在 `scopeEl.ownerDocument` 里。
+
 **坑**：
 
 - 画布类插件把文字放在 shadow root，`innerText` 不穿透 → 事件用 `composedPath()[0]`，

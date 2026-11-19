@@ -31,6 +31,76 @@ git push origin v1.x.x
 
 ---
 
+## [1.12.0] - 2026-11-19
+
+### 变更
+
+- 同源 iframe（如 ThoughtDAG 画布 `/thoughtdag/`）内也能 Alt+点击朗读，且**仍然只有一个面板**
+- 悬停行高亮、朗读逐字高亮、滚动跟随都支持跨到 iframe 文档
+
+### 技术说明
+
+1.11.10 用 `window.top !== window.self` 禁止了子框架注入，代价是画布读不了。
+这次的方案是**顶层代理**：面板只在顶层，但把同一套监听挂到同源 iframe 的 `contentDocument` 上。
+
+关键改动是把「文档」变成参数，而不是写死全局 `document`：
+
+| 原实现 | 现实现 |
+|---|---|
+| `document.elementFromPoint` | `deepElementFromPoint(x, y, doc)` |
+| `document.createRange` | `docOf(node).createRange()` |
+| 覆盖层只建在 `document.body` | 每个文档一套覆盖层（`Map<Document, Element[]>`） |
+| 滚动用 `window` | 用 `node.ownerDocument.defaultView` |
+
+`attachFrames()` 每 2 秒扫一次顶层页面的 `iframe`，对同源且已加载的框架调用 `attachDoc()`；
+跨域访问 `contentDocument` 会抛异常，直接忽略。
+
+面板、播放队列、语音都仍在顶层，所以不会出现第二个播放器。
+
+---
+
+## [1.11.10] - 2026-11-19
+
+### 修复
+
+- 打开 ThoughtDAG 时多出一个播放器面板（iframe 里被重复注入）
+
+### 技术说明
+
+ThoughtDAG 不是新窗口，而是在主界面里叠了一个**同源 iframe**（`/thoughtdag/`）。
+userscript 的 `@match *://*/*` 会同时匹配顶层文档和这个子框架，于是两个文档各自建了一个面板，
+看起来就像"又弹出一个播放器"。
+
+加一行 `if (window.top !== window.self) return;`，只在顶层文档注入。
+
+**代价**：画布 iframe 内部暂时不能用 Alt+点击朗读了。若要恢复，需要在顶层面板里
+跨文档代理（同源可以直接访问 `iframe.contentDocument`，把点击/高亮转发进去），
+属于下一阶段的工作。
+
+---
+
+## [1.11.9] - 2026-11-19
+
+### 变更
+
+- 标题栏新增 `⟳` 检查更新按钮（与其它按钮同尺寸）
+- 点击后拉取仓库 `main` 上的脚本，比对 `@version`：有新版就打开安装页，没有则提示「已是最新」
+
+### 修复
+
+- 无
+
+### 技术说明
+
+用户脚本的自动更新依赖「管理器按周期检查更新地址」，实际体验里可能几小时才轮询一次，
+用户看不到「刚推的新版」。面板加一个手动入口，比让用户去扩展面板里翻「检查更新」直观。
+
+实现用 `fetch` 拉 `raw.githubusercontent.com` 上的文件（该域返回 `Access-Control-Allow-Origin: *`），
+正则取 `@version`，然后用 `fetch` 自带缓存绕过参数 `?t=时间戳` 避免 CDN 旧内容。
+发现新版时用 `window.open` 打开 `.user.js` 地址，管理器会接管并弹出安装页。
+
+---
+
 ## [1.11.8] - 2026-11-19
 
 ### 修复

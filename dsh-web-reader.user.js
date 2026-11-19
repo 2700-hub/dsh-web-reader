@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.11.8
+// @version      1.12.0
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -19,11 +19,29 @@
   // 这样就不依赖脚本猫对「带端口地址」的 @match 解析了。
   if (!/^(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)$/i.test(location.hostname)) return;
 
+  // ThoughtDAG 等插件用同源 iframe 承载画布（/thoughtdag/），
+  // 在子框架里再注入会多出一个面板。只在顶层文档注入。
+  if (window.top !== window.self) return;
+
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.11.8';
+  const LOCAL_VERSION = '1.12.0';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
+
+  // 更新检查：拉取仓库 main 上的脚本，比对 @version
+  const UPDATE_URL = 'https://raw.githubusercontent.com/2700-hub/dsh-web-reader/main/dsh-web-reader.user.js';
+
+  function compareVersions(a, b) {
+    const A = String(a).split('.').map(Number);
+    const B = String(b).split('.').map(Number);
+    for (let i = 0; i < 3; i += 1) {
+      const x = A[i] || 0;
+      const y = B[i] || 0;
+      if (x !== y) return x - y;
+    }
+    return 0;
+  }
 
   // 注入标记：Console 里敲 window.__dshProbe 就能确认脚本是否执行到这一行
   window.__dshProbe = 'v' + SCRIPT_VERSION;
@@ -184,9 +202,14 @@
     return (clone.innerText || clone.textContent || '').trim();
   }
 
+  function docOf(node) {
+    return (node && node.ownerDocument) || document;
+  }
+
   // 穿透 shadow DOM 取命中元素（画布类插件常把文字放进 shadow root）
-  function deepElementFromPoint(x, y) {
-    let el = document.elementFromPoint(x, y);
+  function deepElementFromPoint(x, y, doc) {
+    const d = doc || document;
+    let el = d.elementFromPoint(x, y);
     let guard = 0;
     while (el && el.shadowRoot && guard < 5) {
       const inner = el.shadowRoot.elementFromPoint(x, y);
@@ -198,8 +221,8 @@
   }
 
   // 点击位置 → 命中的块 → 该块在全文里的起始偏移
-  function offsetOfBlockAtPoint(x, y, blocks) {
-    const el = deepElementFromPoint(x, y);
+  function offsetOfBlockAtPoint(x, y, blocks, doc) {
+    const el = deepElementFromPoint(x, y, doc);
     if (!el) return null;
     for (let i = 0; i < blocks.length; i += 1) {
       if (blocks[i].el === el || blocks[i].el.contains(el)) return blocks[i].start;
@@ -214,17 +237,18 @@
     return b;
   }
 
-  function lineRectAt(x, y) {
-    const el = deepElementFromPoint(x, y);
+  function lineRectAt(x, y, doc) {
+    const el = deepElementFromPoint(x, y, doc);
     if (!el) return null;
     const block = blockOf(el);
     if (!block) return null;
-    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    const d = docOf(block);
+    const walker = d.createTreeWalker(block, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
       const len = (node.textContent || '').length;
       if (!len) continue;
-      const r = document.createRange();
+      const r = d.createRange();
       r.setStart(node, 0);
       r.setEnd(node, len);
       const rects = Array.prototype.slice.call(r.getClientRects());
@@ -240,9 +264,10 @@
 
   // 行首字符在该文本节点里的下标
   function lineStartOf(node, rect) {
+    const d = docOf(node);
     const len = (node.textContent || '').length;
     if (!len) return 0;
-    const r = document.createRange();
+    const r = d.createRange();
     const limit = Math.min(len, 3000);
     for (let i = 0; i < limit; i += 1) {
       r.setStart(node, i);
@@ -255,8 +280,8 @@
   }
 
   // 行首 → 全文偏移
-  function offsetOfLineAtPoint(x, y, blocks) {
-    const hit = lineRectAt(x, y);
+  function offsetOfLineAtPoint(x, y, blocks, doc) {
+    const hit = lineRectAt(x, y, doc);
     if (!hit) return null;
     let block = null;
     for (let i = 0; i < blocks.length; i += 1) {
@@ -264,7 +289,7 @@
     }
     if (!block) return null;
     try {
-      const r = document.createRange();
+      const r = docOf(block.el).createRange();
       r.selectNodeContents(block.el);
       r.setEnd(hit.node, lineStartOf(hit.node, hit.rect));
       return block.start + r.toString().length;
@@ -273,23 +298,30 @@
     }
   }
 
-  /* ---------------- 朗读中的当前句高亮 ---------------- */
+  /* ---------------- 朗读中的当前字高亮 ---------------- */
 
-  let playHlEls = [];
-  function ensurePlayHl(i) {
-    if (!playHlEls[i]) {
-      const d = document.createElement('div');
-      d.className = 'dshr-play-hl';
-      d.style.cssText = 'position:fixed;z-index:2147483645;pointer-events:none;'
+  // 每个文档一套覆盖框：顶层文档一套，同源 iframe 各一套
+  const playHlDocs = new Map();
+  function hlListFor(doc) {
+    if (!playHlDocs.has(doc)) playHlDocs.set(doc, []);
+    return playHlDocs.get(doc);
+  }
+  function ensurePlayHl(i, doc) {
+    const d = doc || document;
+    const list = hlListFor(d);
+    if (!list[i]) {
+      const el = d.createElement('div');
+      el.className = 'dshr-play-hl';
+      el.style.cssText = 'position:fixed;z-index:2147483645;pointer-events:none;'
         + 'background:rgba(255,214,102,.26);border-radius:2px;display:none;box-sizing:border-box;'
         + 'transition:left .06s linear,top .06s linear,width .06s linear,height .06s linear';
-      document.body.appendChild(d);
-      playHlEls[i] = d;
+      (d.body || d.documentElement).appendChild(el);
+      list[i] = el;
     }
-    return playHlEls[i];
+    return list[i];
   }
   function clearPlayHighlight() {
-    playHlEls.forEach((d) => { if (d) d.style.display = 'none'; });
+    playHlDocs.forEach((list) => list.forEach((el) => { if (el) el.style.display = 'none'; }));
   }
 
   function buildHlCache(scopeEl) {
@@ -349,14 +381,16 @@
     state.autoScrollAt = now;
     let p = node && node.parentElement;
     let scroller = null;
-    while (p && p !== document.body) {
-      const st = getComputedStyle(p);
+    const win = (node && node.ownerDocument && node.ownerDocument.defaultView) || window;
+    const rootBody = (node && node.ownerDocument && node.ownerDocument.body) || document.body;
+    while (p && p !== rootBody) {
+      const st = win.getComputedStyle(p);
       if (/(auto|scroll)/.test(st.overflowY) && p.scrollHeight > p.clientHeight + 8) { scroller = p; break; }
       p = p.parentElement;
     }
     try {
       if (scroller) scroller.scrollBy({ top: delta, behavior: 'smooth' });
-      else window.scrollBy({ top: delta, behavior: 'smooth' });
+      else win.scrollBy({ top: delta, behavior: 'smooth' });
       // 滚动动画结束后再定位一次，高亮框才不会被留在旧位置（只定位，不再滚）
       clearTimeout(state.scrollTimer);
       state.scrollTimer = setTimeout(() => {
@@ -395,14 +429,15 @@
       const a = locatePos(cache, startRaw);
       const b = locatePos(cache, endRaw);
       if (!a || !b) return;
-      const range = document.createRange();
+      const doc = docOf(scopeEl);
+      const range = doc.createRange();
       range.setStart(a.node, a.offset);
       range.setEnd(b.node, b.offset);
       const rects = Array.prototype.slice.call(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
       if (!rects.length) return;
       clearPlayHighlight();
       const r = rects[0];
-      const d = ensurePlayHl(0);
+      const d = ensurePlayHl(0, doc);
       d.style.left = (r.left - 2) + 'px';
       d.style.top = (r.top - 1) + 'px';
       d.style.width = (r.width + 4) + 'px';
@@ -655,7 +690,7 @@
         color: #e8eaed; background: rgba(24,26,31,.96); border: 1px solid rgba(255,255,255,.14);
         border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.45); padding: 10px 12px;
         width: 280px; backdrop-filter: blur(8px); user-select: none; }
-      #dsh-reader[data-collapsed="1"] { width: 190px; padding: 6px 8px; }
+      #dsh-reader[data-collapsed="1"] { width: 200px; padding: 6px 8px; }
       #dsh-reader[data-collapsed="1"] .dshr-label { display: none; }
       #dsh-reader[data-collapsed="1"] .dshr-row { margin-top: 4px; gap: 4px; }
       #dsh-reader[data-collapsed="1"] button { padding: 1px 4px; font-size: 11px; line-height: 16px; }
@@ -710,6 +745,7 @@
     root.innerHTML = `
       <div class="dshr-row dshr-head" title="拖动可移动面板，双击复位">
         <span class="dshr-title"><span class="dshr-ico">🔊</span><span class="dshr-label"> 朗读</span></span>
+        <button data-act="update" title="检查更新">⟳</button>
         <button data-act="rate" title="语速">⚡</button>
         <button data-act="vol" title="音量">🔉</button>
         <button data-act="pause" title="暂停 / 继续">⏸</button>
@@ -808,6 +844,28 @@
     root.querySelector('.dshr-close').addEventListener('click', () => {
       root.style.display = 'none';
       toast('面板已关闭，Alt+P 可找回');
+    });
+
+    // 检查更新：拉 main 分支的脚本，比对 @version
+    root.querySelector('[data-act="update"]').addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      toast('正在检查更新…');
+      try {
+        const res = await fetch(UPDATE_URL + '?t=' + Date.now(), { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const text = await res.text();
+        const m = /\/\/\s*@version\s+([\d.]+)/.exec(text);
+        if (!m) throw new Error('解析版本号失败');
+        const remote = m[1];
+        if (compareVersions(remote, SCRIPT_VERSION) > 0) {
+          toast('发现 v' + remote + '，正在打开安装页…');
+          window.open(UPDATE_URL, '_blank', 'noopener');
+        } else {
+          toast('已是最新版本 v' + SCRIPT_VERSION);
+        }
+      } catch (err) {
+        toast('检查更新失败：' + (err && err.message ? err.message : err));
+      }
     });
 
     btnPause.addEventListener('click', togglePause);
@@ -1089,26 +1147,35 @@
     if (probeEl) probeEl.style.display = 'none';
   }
 
-  // 行高亮：一个覆盖在正文行上的半透明框（不改 DOM，不会跟 React 打架）
-  let hlEl = null;
-  function ensureHighlight() {
-    if (hlEl && hlEl.isConnected) return hlEl;
-    hlEl = document.createElement('div');
-    hlEl.id = 'dsh-line-hl';
-    hlEl.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;'
+  // 行高亮：每个文档一个覆盖框（顶层 + 同源 iframe 各一份）
+  const hoverHlDocs = new Map();
+  function ensureHighlight(doc) {
+    const d = doc || document;
+    let el = hoverHlDocs.get(d);
+    if (el && el.isConnected) return el;
+    el = d.createElement('div');
+    el.id = 'dsh-line-hl';
+    el.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;'
       + 'background:rgba(107,138,253,.20);border:1px solid rgba(107,138,253,.55);'
       + 'border-radius:4px;display:none;box-sizing:border-box;transition:all .05s linear';
-    document.body.appendChild(hlEl);
-    return hlEl;
+    (d.body || d.documentElement).appendChild(el);
+    hoverHlDocs.set(d, el);
+    return el;
   }
-  function hideHighlight() {
-    if (hlEl) hlEl.style.display = 'none';
+  function hideHighlight(doc) {
+    if (doc) {
+      const el = hoverHlDocs.get(doc);
+      if (el) el.style.display = 'none';
+      return;
+    }
+    hoverHlDocs.forEach((el) => { if (el) el.style.display = 'none'; });
   }
 
   /* ---------------- 事件 ---------------- */
 
-  function turnAtPoint(x, y) {
-    const turns = document.querySelectorAll(TURN_SEL);
+  function turnAtPoint(x, y, doc) {
+    const d = doc || document;
+    const turns = d.querySelectorAll(TURN_SEL);
     for (const t of turns) {
       const r = t.getBoundingClientRect();
       if (r.width > 0 && r.height > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
@@ -1118,9 +1185,10 @@
     return null;
   }
 
-  function blockAtPoint(x, y) {
-    let el = deepElementFromPoint(x, y);
-    while (el && el !== document.body) {
+  function blockAtPoint(x, y, doc) {
+    const d = doc || document;
+    let el = deepElementFromPoint(x, y, d);
+    while (el && el !== d.body) {
       const txt = (el.innerText || '').trim();
       if (txt.length > 60 && txt.length < 20000) return el;
       el = el.parentElement;
@@ -1128,12 +1196,14 @@
     return null;
   }
 
-  document.addEventListener('click', (e) => {
+  function handleAltClick(e, doc) {
+    const d = doc || document;
     if (!e.altKey) return;
-    const sel = String(window.getSelection ? window.getSelection() : '').trim();
+    const win = d.defaultView || window;
+    const sel = String(win.getSelection ? win.getSelection() : '').trim();
     const path = (e.composedPath && e.composedPath()) || [];
     const realTarget = path[0] || e.target;
-    const turn = pickTurn(realTarget) || turnAtPoint(e.clientX, e.clientY);
+    const turn = pickTurn(realTarget) || turnAtPoint(e.clientX, e.clientY, d);
 
     // 通用模式：不在聊天消息里（ThoughtDAG 画布、普通网页）
     if (!turn) {
@@ -1152,7 +1222,7 @@
       if (!text) { toast('这里没有可朗读的内容'); return; }
       state.scopeEl = scope;
       state.hlCache = null;
-      let offset = offsetOfLineAtPoint(e.clientX, e.clientY, blocks);
+      let offset = offsetOfLineAtPoint(e.clientX, e.clientY, blocks, d);
       if (offset === null || offset === undefined) offset = 0;
       playTextFrom(text, offset, '这段内容');
       return;
@@ -1170,26 +1240,28 @@
     state.hlCache = null;
     const blocks = collectBlocks(scope);
     const text = blocks.length ? textFromBlocks(blocks) : textOfTurn(turn);
-    let offset = offsetOfLineAtPoint(e.clientX, e.clientY, blocks);
-    if (offset === null || offset === undefined) offset = offsetOfBlockAtPoint(e.clientX, e.clientY, blocks);
+    let offset = offsetOfLineAtPoint(e.clientX, e.clientY, blocks, d);
+    if (offset === null || offset === undefined) offset = offsetOfBlockAtPoint(e.clientX, e.clientY, blocks, d);
     if (offset === null || offset === undefined) offset = 0;
     playTextFrom(text, offset, '这条消息');
-  }, true);
+  }
 
   // 鼠标指到哪一行，哪一行就亮
   let hlTick = null;
-  document.addEventListener('mousemove', (e) => {
+  function handleHover(e, doc) {
     if (hlTick) return;
     hlTick = requestAnimationFrame(() => {
       hlTick = null;
+      const d = doc || document;
       try {
         const hoverPath = (e.composedPath && e.composedPath()) || [];
         const target = hoverPath[0] || e.target;
-        if (!target || (root && root.contains(target))) { hideHighlight(); return; }
-        const line = lineRectAt(e.clientX, e.clientY);
-        if (!line || !line.rect) { hideHighlight(); return; }
-        if (!pickTurn(target) && (!line.block || line.block === document.body)) { hideHighlight(); return; }
-        const box = ensureHighlight();
+        if (!target) { hideHighlight(d); return; }
+        if (d === document && root && root.contains(target)) { hideHighlight(d); return; }
+        const line = lineRectAt(e.clientX, e.clientY, d);
+        if (!line || !line.rect) { hideHighlight(d); return; }
+        if (!pickTurn(target) && (!line.block || line.block === d.body)) { hideHighlight(d); return; }
+        const box = ensureHighlight(d);
         box.style.left = (line.rect.left - 2) + 'px';
         box.style.top = (line.rect.top - 1) + 'px';
         box.style.width = (line.rect.width + 4) + 'px';
@@ -1197,16 +1269,13 @@
         box.style.display = 'block';
       } catch (err) { /* 忽略 */ }
     });
-  }, { passive: true });
+  }
 
-  document.addEventListener('mouseleave', hideHighlight);
-  document.addEventListener('scroll', hideHighlight, true);
-  window.addEventListener('blur', hideHighlight);
-
-  // 页面滚动后重新定位当前字（避免高亮和文字错位）
+  // 所属文档滚动了，重新定位当前字
   let hlScrollTick = null;
-  document.addEventListener('scroll', () => {
+  function handlePageScroll(doc) {
     if (!state.playing || !state.hlChunk || !state.scopeEl) return;
+    if ((state.scopeEl.ownerDocument || document) !== doc) return;
     if (hlScrollTick) return;
     hlScrollTick = requestAnimationFrame(() => {
       hlScrollTick = null;
@@ -1214,22 +1283,20 @@
         highlightChar(state.scopeEl, state.hlChunk.text, state.hlChunk.index, { noScroll: true });
       }
     });
-  }, { passive: true, capture: true });
+  }
 
-  // 用户自己滚动时：暂停自动跟随 2 秒，并立刻停掉我们正在进行的平滑滚动
-  ['wheel', 'touchstart'].forEach((evt) => {
-    window.addEventListener(evt, () => {
-      state.lastUserScroll = Date.now();
-      state.autoScrollAt = Date.now();
-      clearTimeout(state.scrollTimer);
-      try {
-        const y = window.scrollY;
-        window.scrollTo({ top: y, behavior: 'auto' });
-      } catch (err) { /* 忽略 */ }
-    }, { passive: true, capture: true });
-  });
+  // 用户自己滚动时：暂停自动跟随 2 秒，并停掉正在进行的平滑滚动
+  function handleUserScroll(win) {
+    state.lastUserScroll = Date.now();
+    state.autoScrollAt = Date.now();
+    clearTimeout(state.scrollTimer);
+    try {
+      const y = win.scrollY;
+      win.scrollTo({ top: y, behavior: 'auto' });
+    } catch (err) { /* 忽略 */ }
+  }
 
-  document.addEventListener('keydown', (e) => {
+  function handleKey(e) {
     if (!e.altKey || e.ctrlKey || e.metaKey) return;
     const k = e.key.toLowerCase();
     if (k === 'x') {
@@ -1239,12 +1306,46 @@
       e.preventDefault();
       togglePanel();
     }
-  });
+  }
+
+  // 把同一套监听挂到顶层文档和各个同源 iframe 上
+  const attachedDocs = new WeakSet();
+  function attachDoc(doc) {
+    if (!doc || !doc.body || attachedDocs.has(doc)) return;
+    attachedDocs.add(doc);
+    doc.addEventListener('click', (e) => handleAltClick(e, doc), true);
+    doc.addEventListener('mousemove', (e) => handleHover(e, doc), { passive: true });
+    doc.addEventListener('keydown', handleKey, true);
+    doc.addEventListener('mouseleave', () => hideHighlight(doc));
+    doc.addEventListener('scroll', () => {
+      hideHighlight(doc);
+      handlePageScroll(doc);
+    }, true);
+    const win = doc.defaultView;
+    if (win) {
+      win.addEventListener('blur', () => hideHighlight(doc));
+      ['wheel', 'touchstart'].forEach((evt) => {
+        win.addEventListener(evt, () => handleUserScroll(win), { passive: true, capture: true });
+      });
+    }
+  }
+
+  function attachFrames() {
+    attachDoc(document);
+    document.querySelectorAll('iframe').forEach((f) => {
+      try {
+        const doc = f.contentDocument;
+        if (doc && doc.body) attachDoc(doc);
+      } catch (err) { /* 跨域忽略 */ }
+    });
+  }
 
   function ensureAttached() {
     if (!root || !document.body) return;
     if (!root.isConnected) document.body.appendChild(root);
-    if (hlEl && !hlEl.isConnected) document.body.appendChild(hlEl);
+    hoverHlDocs.forEach((el, doc) => {
+      if (el && !el.isConnected && doc.body) doc.body.appendChild(el);
+    });
   }
 
   function togglePanel() {
@@ -1293,6 +1394,9 @@
       new MutationObserver(() => ensureAttached()).observe(document.body, { childList: true });
     } catch (err) { /* 忽略 */ }
     setInterval(ensureAttached, 2000);
+    // 顶层监听 + 同源 iframe 监听（ThoughtDAG 画布在 iframe 里）
+    attachFrames();
+    setInterval(attachFrames, 2000);
     console.log('[dsh-reader] v' + SCRIPT_VERSION + ' 已注入:', location.href,
       '| turns =', document.querySelectorAll(TURN_SEL).length,
       '| answers =', document.querySelectorAll(ANSWER_SEL).length,
