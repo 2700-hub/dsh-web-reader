@@ -17,15 +17,39 @@
 ## 发布流程
 
 ```powershell
-# 1. 改代码，同步改 @version 和 window.__dshProbe
-# 2. 更新本文件（新增一节）
+# 1. 改代码，验证功能
+# 2. 自动递增版本号 + 插入本节模板
+node scripts/release.mjs 1.x.x "一句话摘要"
+# 3. 补全下面的「变更 / 修复 / 技术说明」
 git add .
 git commit -m "feat: xxx (v1.x.x)"
 git tag -a v1.x.x -m "v1.x.x"
 git push
 git push origin v1.x.x
-# 3. GitHub 建 Release，附 .user.js
+# 4. GitHub 建 Release，附 .user.js
 ```
+
+---
+
+## [1.11.8] - 2026-11-19
+
+### 修复
+
+- 重复安装时页面上出现**两个面板**（`dshr-` 元素翻倍）
+- 控制台版本号写死为旧版本，与实际代码不一致
+
+### 技术说明
+
+两个问题：
+
+1. **重复注入**：脚本猫沙箱会把每个脚本实例隔离，`window.__dshReader` 这个页面级标记
+   在实例之间不可见，于是两份脚本都往下执行、各建一个面板。
+   改为**单实例保护**：建面板前先查 DOM 里有没有 `#dsh-reader`，有就跳过并打印警告。
+   保留原实例而不是互相删除，避免两个实例的 `ensureAttached` 每隔 2 秒互相抢回来。
+2. **版本号**：原来日志和探针里的版本是手写字符串，每次发版容易忘改。
+   改为优先读 `GM_info.script.version`，读不到再退回本地常量 `LOCAL_VERSION`。
+
+> 根本修复仍然是**在脚本猫里删掉重复的脚本**，只保留一份。
 
 ---
 

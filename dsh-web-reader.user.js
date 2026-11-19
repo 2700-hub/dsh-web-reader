@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.11.7
+// @version      1.11.8
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -19,8 +19,14 @@
   // 这样就不依赖脚本猫对「带端口地址」的 @match 解析了。
   if (!/^(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)$/i.test(location.hostname)) return;
 
+  // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
+  const LOCAL_VERSION = '1.11.8';
+  const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
+    ? GM_info.script.version
+    : LOCAL_VERSION;
+
   // 注入标记：Console 里敲 window.__dshProbe 就能确认脚本是否执行到这一行
-  window.__dshProbe = 'v1.11.7';
+  window.__dshProbe = 'v' + SCRIPT_VERSION;
 
   if (window.__dshReader) return;
   window.__dshReader = true;
@@ -1253,10 +1259,29 @@
     if (booted) return;
     if (!document.body) { setTimeout(boot, 50); return; }
     booted = true;
-    probeNote('v1.5.0 已注入，初始化中…');
+    probeNote('v' + SCRIPT_VERSION + ' 已注入，初始化中…');
+
+    // 单实例保护：页面上已经有面板就不再建第二个（重复安装时最常见的问题）
+    const existing = document.getElementById('dsh-reader');
+    if (existing) {
+      const oldVer = existing.dataset.version || '未知';
+      console.warn('[dsh-reader] 已存在面板（' + oldVer + '），本次注入跳过。'
+        + '若功能异常或版本不符，请到脚本猫里删除重复的脚本后刷新。');
+      window.__dshProbe = 'v' + SCRIPT_VERSION + ' (skipped, running: ' + oldVer + ')';
+      return;
+    }
+
+    // 清掉上一次残留的覆盖层（面板被关闭/页面切换时可能留下）
+    document.querySelectorAll('.dshr-play-hl').forEach((n) => n.remove());
+    const lineHl = document.getElementById('dsh-line-hl');
+    if (lineHl) lineHl.remove();
+    const staleProbe = document.getElementById('dsh-probe');
+    if (staleProbe) staleProbe.remove();
+
     try {
       injectStyle();
       build();
+      root.dataset.version = SCRIPT_VERSION;
       render('就绪 · Alt+点击任意消息朗读');
       setTimeout(probeHide, 1800);
     } catch (err) {
@@ -1268,7 +1293,7 @@
       new MutationObserver(() => ensureAttached()).observe(document.body, { childList: true });
     } catch (err) { /* 忽略 */ }
     setInterval(ensureAttached, 2000);
-    console.log('[dsh-reader] v1.10.0 已注入:', location.href,
+    console.log('[dsh-reader] v' + SCRIPT_VERSION + ' 已注入:', location.href,
       '| turns =', document.querySelectorAll(TURN_SEL).length,
       '| answers =', document.querySelectorAll(ANSWER_SEL).length,
       '| voices =', (synth.getVoices() || []).length);

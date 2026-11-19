@@ -38,9 +38,22 @@ dsh web（含 ThoughtDAG 画布）及其他本机页面；普通网站的正文�
 
 ## 开发
 
-1. 改完代码按语义化版本递增 `@version`，并同步 `window.__dshProbe`
-2. 在 `CHANGELOG.md` 顶部新增一节（写清「改了什么」和「为什么」）
+每次改动都按这三步走，**文档和代码放进同一个提交**：
+
+1. `node scripts/release.mjs 1.12.0 "一句话摘要"`
+   —— 自动递增版本号（`@version` + `LOCAL_VERSION`）并往 CHANGELOG 插入一节模板
+2. 补全 CHANGELOG 里的「变更 / 修复 / 技术说明」
 3. 提交、打 tag、发 Release
+
+```powershell
+node scripts/release.mjs 1.12.0 "支持普通网站正文朗读"
+git add .
+git commit -m "feat: 支持普通网站正文朗读 (v1.12.0)"
+git tag -a v1.12.0 -m "v1.12.0"
+git push && git push origin v1.12.0
+```
+
+> 只改代码不写文档，未来的自己和 AI 都得重新考古。
 
 调试接口（页面 Console）：
 
