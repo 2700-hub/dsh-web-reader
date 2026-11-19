@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.10.0
+// @version      1.11.7
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -20,7 +20,7 @@
   if (!/^(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)$/i.test(location.hostname)) return;
 
   // 注入标记：Console 里敲 window.__dshProbe 就能确认脚本是否执行到这一行
-  window.__dshProbe = 'v1.10.0';
+  window.__dshProbe = 'v1.11.7';
 
   if (window.__dshReader) return;
   window.__dshReader = true;
@@ -53,8 +53,17 @@
     gen: 0,
     current: null,
     boundary: null,
+    scopeEl: null,
+    hlCache: null,
+    hlChunk: null,
+    hlSearchPos: 0,
+    lastScrollAt: 0,
+    lastUserScroll: 0,
+    autoScrollAt: 0,
+    scrollTimer: 0,
   };
   window.__dshState = state; // 调试用
+  window.__dshHighlight = highlightChar; // 调试用
 
   /* ---------------- 文本处理 ---------------- */
 
@@ -136,7 +145,8 @@
     const blocks = [];
     let start = 0;
     leaf.forEach((el) => {
-      let t = (el.innerText || el.textContent || '').trim();
+      let t = (el.innerText || '').trim();
+      if (!t) t = (el.textContent || '').replace(/\s+/g, ' ').trim();
       if (!t) return;
       if (el.tagName === 'PRE') {
         // 代码块逐行念会一顿一顿的：压成一行，当一句话读完
@@ -168,9 +178,22 @@
     return (clone.innerText || clone.textContent || '').trim();
   }
 
+  // 穿透 shadow DOM 取命中元素（画布类插件常把文字放进 shadow root）
+  function deepElementFromPoint(x, y) {
+    let el = document.elementFromPoint(x, y);
+    let guard = 0;
+    while (el && el.shadowRoot && guard < 5) {
+      const inner = el.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === el) break;
+      el = inner;
+      guard += 1;
+    }
+    return el;
+  }
+
   // 点击位置 → 命中的块 → 该块在全文里的起始偏移
   function offsetOfBlockAtPoint(x, y, blocks) {
-    const el = document.elementFromPoint(x, y);
+    const el = deepElementFromPoint(x, y);
     if (!el) return null;
     for (let i = 0; i < blocks.length; i += 1) {
       if (blocks[i].el === el || blocks[i].el.contains(el)) return blocks[i].start;
@@ -186,7 +209,7 @@
   }
 
   function lineRectAt(x, y) {
-    const el = document.elementFromPoint(x, y);
+    const el = deepElementFromPoint(x, y);
     if (!el) return null;
     const block = blockOf(el);
     if (!block) return null;
@@ -244,12 +267,194 @@
     }
   }
 
+  /* ---------------- 朗读中的当前句高亮 ---------------- */
+
+  let playHlEls = [];
+  function ensurePlayHl(i) {
+    if (!playHlEls[i]) {
+      const d = document.createElement('div');
+      d.className = 'dshr-play-hl';
+      d.style.cssText = 'position:fixed;z-index:2147483645;pointer-events:none;'
+        + 'background:rgba(255,214,102,.26);border-radius:2px;display:none;box-sizing:border-box;'
+        + 'transition:left .06s linear,top .06s linear,width .06s linear,height .06s linear';
+      document.body.appendChild(d);
+      playHlEls[i] = d;
+    }
+    return playHlEls[i];
+  }
+  function clearPlayHighlight() {
+    playHlEls.forEach((d) => { if (d) d.style.display = 'none'; });
+  }
+
+  function buildHlCache(scopeEl) {
+    if (!scopeEl) return null;
+    const nodes = [];
+    let raw = '';
+    const walker = document.createTreeWalker(scopeEl, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const t = node.textContent || '';
+      if (!t) continue;
+      nodes.push({ node, start: raw.length, len: t.length });
+      raw += t;
+    }
+    if (!raw) return null;
+    let norm = '';
+    const map = [];
+    for (let i = 0; i < raw.length; i += 1) {
+      const ch = raw[i];
+      if (/\s/.test(ch)) continue;
+      norm += ch;
+      map.push(i);
+    }
+    return { nodes, raw, norm, map, scope: scopeEl };
+  }
+
+  function locatePos(cache, pos) {
+    for (let i = 0; i < cache.nodes.length; i += 1) {
+      const n = cache.nodes[i];
+      if (pos >= n.start && pos < n.start + n.len) return { node: n.node, offset: pos - n.start };
+    }
+    const last = cache.nodes[cache.nodes.length - 1];
+    return last ? { node: last.node, offset: last.len } : null;
+  }
+
+  function ensureCache(scopeEl) {
+    if (!state.hlCache || state.hlCache.scope !== scopeEl) {
+      state.hlCache = buildHlCache(scopeEl);
+    }
+    return state.hlCache;
+  }
+
+  // 让当前朗读位置始终靠近视口中线：像提词器一样平滑下滚
+  function revealRect(rect, node) {
+    if (!rect || state.paused) return;
+    const now = Date.now();
+    // 用户刚手动滚过，先别抢控制权
+    if (now - (state.lastUserScroll || 0) < 2000) return;
+    // 我们自己刚滚过，等它稳定，避免和滚动事件互相拉扯
+    if (now - (state.autoScrollAt || 0) < 500) return;
+    const vh = window.innerHeight;
+    const target = vh * 0.45;
+    const delta = rect.top - target;
+    if (Math.abs(delta) < 8) return;
+    if (now - (state.lastScrollAt || 0) < 250) return;
+    state.lastScrollAt = now;
+    state.autoScrollAt = now;
+    let p = node && node.parentElement;
+    let scroller = null;
+    while (p && p !== document.body) {
+      const st = getComputedStyle(p);
+      if (/(auto|scroll)/.test(st.overflowY) && p.scrollHeight > p.clientHeight + 8) { scroller = p; break; }
+      p = p.parentElement;
+    }
+    try {
+      if (scroller) scroller.scrollBy({ top: delta, behavior: 'smooth' });
+      else window.scrollBy({ top: delta, behavior: 'smooth' });
+      // 滚动动画结束后再定位一次，高亮框才不会被留在旧位置（只定位，不再滚）
+      clearTimeout(state.scrollTimer);
+      state.scrollTimer = setTimeout(() => {
+        if (state.playing && state.hlChunk && state.scopeEl && !state.paused) {
+          highlightChar(state.scopeEl, state.hlChunk.text, state.hlChunk.index, { noScroll: true });
+        }
+      }, 420);
+    } catch (err) { /* 忽略 */ }
+  }
+
+  // 逐字高亮：charIndex 是这一段文本里的字符下标
+  function highlightChar(scopeEl, chunkText, charIndex, opts) {
+    if (!scopeEl || !chunkText) return;
+    const cache = ensureCache(scopeEl);
+    if (!cache) return;
+    try {
+      let ci = Math.max(0, Math.min(charIndex, chunkText.length - 1));
+      let guard = 0;
+      while (ci < chunkText.length - 1 && /\s/.test(chunkText[ci]) && guard < 30) { ci += 1; guard += 1; }
+      // 取 14 个字的窗口做定位：单个字在全文里会重名，窗口才够唯一
+      const WIN = 14;
+      const winStart = Math.max(0, Math.min(ci, chunkText.length - WIN));
+      const context = chunkText.slice(winStart, winStart + WIN).replace(/\s+/g, '');
+      if (context.length < 2) return;
+      const targetOffset = chunkText.slice(winStart, ci).replace(/\s+/g, '').length;
+      const from = Math.max(0, (state.hlSearchPos || 0) - 80);
+      let idx = cache.norm.indexOf(context, from);
+      if (idx < 0) idx = cache.norm.indexOf(context);
+      if (idx < 0) return;
+      state.hlSearchPos = idx + context.length;
+      state.hlChunk = { text: chunkText, index: charIndex };
+
+      const pos = Math.min(cache.map.length - 1, idx + Math.min(targetOffset, context.length - 1));
+      const startRaw = cache.map[pos];
+      const endRaw = cache.map[pos] + 1;
+      const a = locatePos(cache, startRaw);
+      const b = locatePos(cache, endRaw);
+      if (!a || !b) return;
+      const range = document.createRange();
+      range.setStart(a.node, a.offset);
+      range.setEnd(b.node, b.offset);
+      const rects = Array.prototype.slice.call(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+      if (!rects.length) return;
+      clearPlayHighlight();
+      const r = rects[0];
+      const d = ensurePlayHl(0);
+      d.style.left = (r.left - 2) + 'px';
+      d.style.top = (r.top - 1) + 'px';
+      d.style.width = (r.width + 4) + 'px';
+      d.style.height = (r.height + 2) + 'px';
+      d.style.display = 'block';
+      if (!opts || !opts.noScroll) revealRect(r, a.node);
+    } catch (err) { /* 忽略 */ }
+  }
+
+  // 边界事件很密，用 rAF 合并
+  let charTick = null;
+  let pendingChar = null;
+  function queueCharHighlight(scopeEl, chunkText, charIndex) {
+    pendingChar = { scopeEl, chunkText, charIndex };
+    if (charTick) return;
+    charTick = requestAnimationFrame(() => {
+      charTick = null;
+      const p = pendingChar;
+      pendingChar = null;
+      if (p && state.playing) highlightChar(p.scopeEl, p.chunkText, p.charIndex);
+    });
+  }
+
+  // 通用模式：不在聊天消息里时，向上找一段可读内容（ThoughtDAG、普通网页）
+  function genericScopeAt(el) {
+    let node = el;
+    let best = null;
+    while (node && node !== document.body) {
+      const txt = (node.innerText || '').trim() || (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (txt.length >= 20 && txt.length <= 3000) {
+        best = node;
+        // 找到能装下多个段落的容器就停，避免只读到第一段
+        const blocks = node.querySelectorAll('p, li, pre, h1, h2, h3, h4, h5, h6, blockquote');
+        if (blocks.length >= 2) return node;
+      }
+      node = node.parentElement;
+    }
+    return best;
+  }
+
   /* ---------------- 语音 ---------------- */
 
   function zhVoices() {
     const all = synth.getVoices() || [];
-    const zh = all.filter((v) => /zh[-_]?CN|Chinese|中文|普通话|國語/i.test(v.lang + ' ' + v.name));
-    return zh.length ? zh : all;
+    const isZh = (v) => /zh[-_]?CN|zh[-_]?HK|zh[-_]?TW|Chinese|中文|普通话|普通話|國語|粤語|粵語/i
+      .test(v.lang + ' ' + v.name);
+    const zh = all.filter(isZh);
+    const pool = zh.length ? zh : all;
+    // 本机音色优先（在线音色断网就没声），其次 Microsoft/Windows 的排前面
+    return pool.slice().sort((a, b) => {
+      const rank = (v) => {
+        let r = 0;
+        if (v.localService === false) r += 10;
+        if (!/Microsoft|Windows/i.test(v.name)) r += 1;
+        return r;
+      };
+      return rank(a) - rank(b);
+    });
   }
 
   const PREFERRED = ['Yunxi', 'Xiaoxiao', '云希', '晓晓', 'Yaoyao', '瑶瑶', 'Yunjian', '云健', 'Kangkang', '康康'];
@@ -281,6 +486,10 @@
     state.index = 0;
     state.queued = 0;
     state.current = null;
+    state.hlCache = null;
+    state.hlChunk = null;
+    state.hlSearchPos = 0;
+    clearPlayHighlight();
     synth.cancel();
     render();
   }
@@ -290,6 +499,9 @@
     state.paused = false;
     state.current = null;
     state.index = state.chunks.length;
+    state.hlChunk = null;
+    state.hlSearchPos = 0;
+    clearPlayHighlight();
     render('朗读完成');
   }
 
@@ -308,13 +520,19 @@
       state.index = i;
       state.current = chunk.text;
       state.boundary = null;
+      if (state.scopeEl) {
+        state.hlSearchPos = 0;
+        queueCharHighlight(state.scopeEl, chunk.text, 0);
+      }
       render();
     };
 
-    // 记录"念到第几个字"，改语速时从这里接着念，几乎不用回头
+    // 记录"念到第几个字"，同时把高亮挪到当前字
     u.onboundary = (ev) => {
       if (gen !== state.gen) return;
-      if (typeof ev.charIndex === 'number') state.boundary = { i, charIndex: ev.charIndex };
+      if (typeof ev.charIndex !== 'number') return;
+      state.boundary = { i, charIndex: ev.charIndex };
+      if (state.scopeEl) queueCharHighlight(state.scopeEl, chunk.text, ev.charIndex);
     };
 
     u.onend = () => {
@@ -398,12 +616,24 @@
   function togglePause() {
     if (!state.playing) return;
     if (state.paused) {
-      synth.resume();
       state.paused = false;
+      synth.resume();
       render();
+      // Chrome 暂停久了 resume() 会静默失效：没声音就从当前段重新开口
+      const gen = state.gen;
+      setTimeout(() => {
+        if (gen !== state.gen || !state.playing || state.paused) return;
+        if (!synth.speaking && !synth.pending) {
+          const cur = state.chunks[state.index];
+          startFrom(cur ? cur.from : 0);
+          toast('已从当前段恢复');
+        }
+      }, 1200);
     } else {
       synth.pause();
       state.paused = true;
+      state.autoScrollAt = Date.now();
+      clearTimeout(state.scrollTimer);
       render('已暂停');
     }
   }
@@ -781,7 +1011,7 @@
     voices.forEach((v) => {
       const o = document.createElement('option');
       o.value = v.name;
-      o.textContent = v.name + ' (' + v.lang + ')';
+      o.textContent = v.name + ' (' + v.lang + ')' + (v.localService === false ? ' · 在线' : '');
       voiceSel.appendChild(o);
     });
     const chosen = voices.find((v) => v.name === prev) || pickVoice();
@@ -883,7 +1113,7 @@
   }
 
   function blockAtPoint(x, y) {
-    let el = document.elementFromPoint(x, y);
+    let el = deepElementFromPoint(x, y);
     while (el && el !== document.body) {
       const txt = (el.innerText || '').trim();
       if (txt.length > 60 && txt.length < 20000) return el;
@@ -894,18 +1124,44 @@
 
   document.addEventListener('click', (e) => {
     if (!e.altKey) return;
-    const turn = pickTurn(e.target) || turnAtPoint(e.clientX, e.clientY);
+    const sel = String(window.getSelection ? window.getSelection() : '').trim();
+    const path = (e.composedPath && e.composedPath()) || [];
+    const realTarget = path[0] || e.target;
+    const turn = pickTurn(realTarget) || turnAtPoint(e.clientX, e.clientY);
+
+    // 通用模式：不在聊天消息里（ThoughtDAG 画布、普通网页）
     if (!turn) {
-      const block = blockAtPoint(e.clientX, e.clientY);
-      if (!block) { toast('这里没有可朗读的内容'); return; }
       e.preventDefault();
       e.stopPropagation();
-      play(block.innerText || '', '这段内容');
+      if (sel.length > 1) {
+        state.scopeEl = null;
+        play(sel, '选中内容');
+        return;
+      }
+      const scope = genericScopeAt(realTarget);
+      if (!scope) { toast('这里没有可朗读的内容'); return; }
+      const blocks = collectBlocks(scope);
+      let text = blocks.length ? textFromBlocks(blocks) : (scope.innerText || '').trim();
+      if (!text) text = (scope.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!text) { toast('这里没有可朗读的内容'); return; }
+      state.scopeEl = scope;
+      state.hlCache = null;
+      let offset = offsetOfLineAtPoint(e.clientX, e.clientY, blocks);
+      if (offset === null || offset === undefined) offset = 0;
+      playTextFrom(text, offset, '这段内容');
       return;
     }
+
     e.preventDefault();
     e.stopPropagation();
+    if (sel.length > 1) {
+      state.scopeEl = null;
+      play(sel, '选中内容');
+      return;
+    }
     const scope = scopeOfTurn(turn);
+    state.scopeEl = scope;
+    state.hlCache = null;
     const blocks = collectBlocks(scope);
     const text = blocks.length ? textFromBlocks(blocks) : textOfTurn(turn);
     let offset = offsetOfLineAtPoint(e.clientX, e.clientY, blocks);
@@ -921,12 +1177,12 @@
     hlTick = requestAnimationFrame(() => {
       hlTick = null;
       try {
-        const target = e.target;
+        const hoverPath = (e.composedPath && e.composedPath()) || [];
+        const target = hoverPath[0] || e.target;
         if (!target || (root && root.contains(target))) { hideHighlight(); return; }
-        const turn = pickTurn(target);
-        if (!turn) { hideHighlight(); return; }
         const line = lineRectAt(e.clientX, e.clientY);
         if (!line || !line.rect) { hideHighlight(); return; }
+        if (!pickTurn(target) && (!line.block || line.block === document.body)) { hideHighlight(); return; }
         const box = ensureHighlight();
         box.style.left = (line.rect.left - 2) + 'px';
         box.style.top = (line.rect.top - 1) + 'px';
@@ -940,6 +1196,32 @@
   document.addEventListener('mouseleave', hideHighlight);
   document.addEventListener('scroll', hideHighlight, true);
   window.addEventListener('blur', hideHighlight);
+
+  // 页面滚动后重新定位当前字（避免高亮和文字错位）
+  let hlScrollTick = null;
+  document.addEventListener('scroll', () => {
+    if (!state.playing || !state.hlChunk || !state.scopeEl) return;
+    if (hlScrollTick) return;
+    hlScrollTick = requestAnimationFrame(() => {
+      hlScrollTick = null;
+      if (state.playing && state.hlChunk) {
+        highlightChar(state.scopeEl, state.hlChunk.text, state.hlChunk.index, { noScroll: true });
+      }
+    });
+  }, { passive: true, capture: true });
+
+  // 用户自己滚动时：暂停自动跟随 2 秒，并立刻停掉我们正在进行的平滑滚动
+  ['wheel', 'touchstart'].forEach((evt) => {
+    window.addEventListener(evt, () => {
+      state.lastUserScroll = Date.now();
+      state.autoScrollAt = Date.now();
+      clearTimeout(state.scrollTimer);
+      try {
+        const y = window.scrollY;
+        window.scrollTo({ top: y, behavior: 'auto' });
+      } catch (err) { /* 忽略 */ }
+    }, { passive: true, capture: true });
+  });
 
   document.addEventListener('keydown', (e) => {
     if (!e.altKey || e.ctrlKey || e.metaKey) return;
