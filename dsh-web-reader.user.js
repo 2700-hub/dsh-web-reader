@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.15
+// @version      1.15.16
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.15';
+  const LOCAL_VERSION = '1.15.16';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -605,8 +605,8 @@
   // 提前排 2 段（当前 + 前方 1 段）：既不断句，改语速时等一两段就生效
   const LOOKAHEAD = 2;
 
-  function stop() {
-    state.autoQueue = [];
+  function stop(keepQueue) {
+    if (!keepQueue) state.autoQueue = [];
     // 没在播就别 cancel：cancel() 会把语音引擎打回未初始化状态，
     // 下一次开口要多等几百毫秒——这正是"点了朗读要等一下"的主要来源。
     const wasActive = state.playing || synth.speaking || synth.pending;
@@ -637,7 +637,7 @@
     state.scopeEl = item.scope;
     state.hlCache = null;
     state.lastAutoText = item.text;
-    playTextFrom(item.text, 0, '新回复');
+    playTextFrom(item.text, 0, '新回复', true);
   }
 
   window.__dshDrainAuto = drainAutoQueue; // 调试用
@@ -728,19 +728,22 @@
   function localAudioFor(c, token) {
     const chunk = state.chunks[c];
     if (!chunk) { finish(); return; }
-    const cached = state.localUrls.get(c);
-    // 已缓存的用 blob（最快）；没缓存直接给服务器 URL，浏览器边下边播，
-    // 首字延迟取决于云端首包，而不是整段合成完。
-    const src = typeof cached === 'string'
-      ? cached
+    const cachedBlob = state.localUrls.get(c);
+    const useBlob = typeof cachedBlob === 'string';
+    state.loadingCached = useBlob;
+    // 没有本地 blob 就先问服务端是否命中缓存，避免把"缓存秒开"学成冷启动
+    const prepared = useBlob
+      ? Promise.resolve()
+      : fetch(LOCAL_TTS + '/stat?text=' + encodeURIComponent(chunk.text))
+          .then((r) => r.json())
+          .then((j) => { state.loadingCached = !!j.cached; })
+          .catch(() => { /* 忽略 */ });
+
+    prepared.then(() => {
+    if (token !== state.localToken) return;
+    const src = useBlob
+      ? cachedBlob
       : (LOCAL_TTS + '/tts?text=' + encodeURIComponent(chunk.text) + '&priority=high');
-
-    state.loadingCached = false;
-    fetch(LOCAL_TTS + '/stat?text=' + encodeURIComponent(chunk.text))
-      .then((r) => r.json())
-      .then((j) => { state.loadingCached = !!j.cached; })
-      .catch(() => { /* 忽略 */ });
-
     const audio = new Audio(src);
     audio.volume = Math.max(0, Math.min(1, Number.isFinite(state.volume) ? state.volume : 1));
     audio.playbackRate = state.rate || 1;
@@ -802,6 +805,7 @@
     });
     // 下一段延后预取：先让当前段出声，避免抢走连接
     setTimeout(() => { if (token === state.localToken) localPrefetch(c + 1); }, 600);
+    });
   }
 
   // 本地模式：首段只放第一句，让声音尽快出来；后面再按 150 字合并
@@ -913,7 +917,7 @@
     if (text === state.lastAutoText) return;
     // 正在朗读：先排队，读完当前这轮再接着读，不打断
     if (state.playing) {
-      const dup = state.autoQueue.some((q) => q.turn === turn || q.text === text);
+      const dup = state.autoQueue.some((q) => q.text === text);
       if (!dup) {
         state.autoQueue.push({ turn, scope, text, at: Date.now() });
         if (state.autoQueue.length > 5) state.autoQueue.shift();
@@ -1086,8 +1090,8 @@
   }
 
   // 从某个字符偏移处对应的句子开始读
-  function playTextFrom(text, offset, label) {
-    stop();
+  function playTextFrom(text, offset, label, keepQueue) {
+    stop(keepQueue);
     state.sentences = splitSentences(text);
     if (!state.sentences.length) {
       render('没有可朗读的文字');
