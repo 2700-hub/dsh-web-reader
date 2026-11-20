@@ -31,6 +31,29 @@ git push --follow-tags origin main
 
 ---
 
+## [1.13.9] - 2026-11-20
+
+### 变更
+
+- 面板新增「启动本地服务」按钮（服务没开时才出现）
+- 新增开机自启脚本 `install-autostart.cmd`
+
+### 技术说明
+
+浏览器出于安全限制，**网页无法直接启动本地程序**，所以用两条路绕：
+
+1. **自定义协议**：`install-protocol.cmd` 在 `HKCU\Software\Classes` 注册 `dsh-tts://`
+   协议，指向 `run-hidden.vbs`。面板按钮执行 `location.href = 'dsh-tts://start'`，
+   由 Windows 调起服务；2.5 秒后自动重连并勾选。
+2. **开机自启**：`install-autostart.cmd` 用计划任务（`onlogon`）静默启动，
+   之后无需手动开。
+
+勾选失败时的提示也指向了这两个脚本。
+
+> 注意：自定义协议首次点击时浏览器可能弹「是否允许打开此应用」，点允许即可。
+
+---
+
 ## [1.13.8] - 2026-11-20
 
 ### 变更

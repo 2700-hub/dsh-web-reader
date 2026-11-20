@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.13.8
+// @version      1.13.9
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.13.8';
+  const LOCAL_VERSION = '1.13.9';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -1038,6 +1038,10 @@
       #dsh-reader .dshr-update-link:hover { background: rgba(107,138,253,.22); }
       #dsh-reader .dshr-local { display: flex; align-items: center; gap: 6px; color: #c9d1e0; font-size: 11px; }
       #dsh-reader .dshr-local input { accent-color: #6b8afd; }
+      #dsh-reader .dshr-start-server { flex: 1; cursor: pointer; font: inherit; color: #a9c0ff;
+        border: 1px solid rgba(107,138,253,.6); border-radius: 8px; padding: 4px 6px;
+        background: rgba(107,138,253,.12); }
+      #dsh-reader .dshr-start-server:hover { background: rgba(107,138,253,.24); }
       #dsh-reader .dshr-kbd { opacity: .55; font-size: 11px; margin-top: 6px; }
       #dsh-reader .dshr-pop { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px);
         background: rgba(24,26,31,.98); border: 1px solid rgba(255,255,255,.16);
@@ -1078,6 +1082,7 @@
         <div class="dshr-cur"></div>
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
         <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-local-cb"> 本地语音服务（云健 · 无句间停顿）</label></div>
+        <div class="dshr-row"><button class="dshr-start-server" style="display:none">启动本地服务</button></div>
         <div class="dshr-row"><a class="dshr-update-link" target="_blank" rel="noopener" style="display:none">安装新版</a></div>
         <div class="dshr-row"><select class="dshr-voice"></select></div>
         <div class="dshr-kbd">Alt+点击正文从该句读 · Alt+X 停止 · Alt+P 面板</div>
@@ -1232,6 +1237,33 @@
       }
     });
 
+    const startServerBtn = root.querySelector('.dshr-start-server');
+    function showStartServer(on) {
+      if (startServerBtn) startServerBtn.style.display = on ? '' : 'none';
+    }
+    if (startServerBtn) {
+      startServerBtn.addEventListener('click', () => {
+        showStartServer(false);
+        toast('正在唤起本地服务…');
+        try { window.location.href = 'dsh-tts://start'; } catch (err) { /* 忽略 */ }
+        setTimeout(() => {
+          localPing().then((ok) => {
+            if (ok) {
+              state.local = true;
+              localStorage.setItem(LS_LOCAL, '1');
+              const cb = root.querySelector('.dshr-local-cb');
+              if (cb) cb.checked = true;
+              toast('本地语音已就绪');
+              render();
+            } else {
+              showStartServer(true);
+              toast('没启动成功：先运行 tools/tts-server/install-protocol.cmd');
+            }
+          });
+        }, 2500);
+      });
+    }
+
     // 本地语音开关
     const localCb = root.querySelector('.dshr-local-cb');
     if (localCb) {
@@ -1248,7 +1280,8 @@
             state.local = false;
             localStorage.setItem(LS_LOCAL, '0');
             localCb.checked = false;
-            toast('本地语音服务未启动：运行 tools/tts-server/start.cmd');
+            showStartServer(true);
+            toast('本地语音服务未启动：点「启动本地服务」，或先运行 install-protocol.cmd');
           }
           render();
         });
