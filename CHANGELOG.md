@@ -31,6 +31,28 @@ git push --follow-tags origin main
 
 ---
 
+## [1.12.3] - 2026-11-20
+
+### 变更
+
+- 仓库自动化：推 `v*` 标签后，GitHub Actions 自动创建 Release 并附上 `dsh-web-reader.user.js`
+
+### 修复
+
+- 无（本版没有脚本功能改动）
+
+### 技术说明
+
+新增 `.github/workflows/release.yml`，在标签推送时用 `softprops/action-gh-release`
+生成 Release，说明文字按提交自动生成，附件通过 `files` 指定。
+
+之前每个版本都要手动去 GitHub 点 "Draft a new release"、拖文件、点发布，
+容易忘；现在 `git push --follow-tags origin main` 之后只剩等 Actions 跑完。
+
+> 本版仅用于验证这条流水线，脚本行为与 1.12.2 完全一致。
+
+---
+
 ## [1.12.2] - 2026-11-20
 
 ### 修复
