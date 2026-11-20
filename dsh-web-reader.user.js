@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.13.3
+// @version      1.13.4
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.13.3';
+  const LOCAL_VERSION = '1.13.4';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -647,51 +647,47 @@
     const chunk = state.chunks[c];
     if (!chunk) { finish(); return; }
     const cached = state.localUrls.get(c);
-    const wait = cached ? Promise.resolve(cached) : (localPrefetch(c), Promise.resolve(state.localUrls.get(c)));
-    wait
-      .then((src) => {
-        if (token !== state.localToken) return;
-        const audio = new Audio(src);
-        audio.volume = Math.max(0, Math.min(1, Number.isFinite(state.volume) ? state.volume : 1));
-        audio.playbackRate = state.rate || 1;
-        state.localAudio = audio;
-        audio.ontimeupdate = () => {
-          if (token !== state.localToken) return;
-          const dur = audio.duration;
-          if (!dur || !isFinite(dur)) return;
-          const frac = Math.min(1, audio.currentTime / dur);
-          const span = (chunk.to != null ? chunk.to : chunk.from + 1) - chunk.from;
-          state.progress = chunk.from + frac * span;
-          if (state.scopeEl) {
-            highlightChar(state.scopeEl, chunk.text, Math.min(chunk.text.length - 1, Math.floor(frac * chunk.text.length)));
-          }
-          render();
-        };
-        audio.onended = () => {
-          if (token !== state.localToken) return;
-          if (c + 1 < state.chunks.length) localPlay(c + 1);
-          else finish();
-        };
-        audio.onerror = () => {
-          if (token !== state.localToken) return;
-          toast('本地语音播放失败');
-          state.playing = false;
-          render();
-        };
-        audio.play().catch((err) => {
-          if (token !== state.localToken) return;
-          state.playing = false;
-          toast('播放被拦截：' + (err && err.message ? err.message : err));
-          render();
-        });
-        localPrefetch(c + 1);
-      })
-      .catch(() => {
-        if (token !== state.localToken) return;
-        toast('本地语音合成失败：检查 tts-server 窗口');
-        state.playing = false;
-        render('本地语音不可用');
-      });
+    // 已缓存的用 blob（最快）；没缓存直接给服务器 URL，浏览器边下边播，
+    // 首字延迟取决于云端首包，而不是整段合成完。
+    const src = typeof cached === 'string'
+      ? cached
+      : (LOCAL_TTS + '/tts?text=' + encodeURIComponent(chunk.text));
+
+    const audio = new Audio(src);
+    audio.volume = Math.max(0, Math.min(1, Number.isFinite(state.volume) ? state.volume : 1));
+    audio.playbackRate = state.rate || 1;
+    state.localAudio = audio;
+    audio.ontimeupdate = () => {
+      if (token !== state.localToken) return;
+      const dur = audio.duration;
+      if (!dur || !isFinite(dur)) return;
+      const frac = Math.min(1, audio.currentTime / dur);
+      const span = (chunk.to != null ? chunk.to : chunk.from + 1) - chunk.from;
+      state.progress = chunk.from + frac * span;
+      if (state.scopeEl) {
+        highlightChar(state.scopeEl, chunk.text, Math.min(chunk.text.length - 1, Math.floor(frac * chunk.text.length)));
+      }
+      render();
+    };
+    audio.onended = () => {
+      if (token !== state.localToken) return;
+      if (c + 1 < state.chunks.length) localPlay(c + 1);
+      else finish();
+    };
+    audio.onerror = () => {
+      if (token !== state.localToken) return;
+      toast('本地语音播放失败');
+      state.playing = false;
+      render();
+    };
+    audio.play().catch((err) => {
+      if (token !== state.localToken) return;
+      state.playing = false;
+      toast('播放被拦截：' + (err && err.message ? err.message : err));
+      render();
+    });
+    // 后两段提前取成 blob，轮到它们时不再碰网络
+    localPrefetch(c + 1);
   }
 
   // 一段一个音频：当前段播的时候，后两段已经在本地备好
