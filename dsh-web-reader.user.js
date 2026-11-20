@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.17
+// @version      1.15.18
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.17';
+  const LOCAL_VERSION = '1.15.18';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -641,6 +641,7 @@
   }
 
   window.__dshDrainAuto = drainAutoQueue; // 调试用
+  window.__dshQueueDump = () => state.autoQueue.map((q) => ({ at: q.at, text: String(q.text || '').slice(0, 120) }));
 
   function finish() {
     localStop();
@@ -919,7 +920,18 @@
         state.autoQueue.push({ turn, scope, text, at: Date.now() });
         if (state.autoQueue.length > 5) state.autoQueue.shift();
       }
-      window.__dshAutoLast = { reason: 'queued', chars: text.length, at: Date.now() };
+      window.__dshAutoLast = {
+        reason: 'queued',
+        chars: text.length,
+        head: text.slice(0, 120),
+        blocks: collectBlocks(scope).slice(0, 6).map((b) => ({
+          tag: b.el.tagName,
+          cls: String(b.el.className || '').slice(0, 60),
+          text: (b.el.innerText || '').slice(0, 40),
+          excluded: (() => { try { return !!b.el.closest(EXCLUDE_SEL + ',' + USER_SEL) || looksLikeMeta(b.el.innerText || ''); } catch (e) { return false; } })(),
+        })),
+        at: Date.now(),
+      };
       return;
     }
     state.lastAutoText = text;

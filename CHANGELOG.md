@@ -31,6 +31,41 @@ git push --follow-tags origin main
 
 ---
 
+## [1.15.18] - 2026-11-20
+
+### 变更
+
+- 自动朗读的**排队条目**也记录文本与块结构
+- 新增 `window.__dshQueueDump()` 查看队列内容
+
+### 技术说明
+
+之前只有 `reason: 'playing'` 时才记录 `head` 和 `blocks`；
+如果内容是在"正在播放"时入队的，快照只有长度（例如 `chars: 46`），
+无法判断这 46 个字到底是什么。
+
+现在入队时同样记录：
+
+```js
+{
+  reason: 'queued',
+  chars: 46,
+  head: '已深度思考 8 秒…',
+  blocks: [{ tag: 'P', cls: '...', text: '…', excluded: false }]
+}
+```
+
+再加一个队列快照：
+
+```js
+window.__dshQueueDump()
+// [{ at: 1795..., text: '已深度思考 8 秒…' }]
+```
+
+这样"排队的到底是哪段文字"一目了然。
+
+---
+
 ## [1.15.17] - 2026-11-20
 
 ### 修复
