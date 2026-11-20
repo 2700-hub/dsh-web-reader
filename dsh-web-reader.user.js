@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.10
+// @version      1.15.11
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.10';
+  const LOCAL_VERSION = '1.15.11';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -711,6 +711,12 @@
     const src = typeof cached === 'string'
       ? cached
       : (LOCAL_TTS + '/tts?text=' + encodeURIComponent(chunk.text) + '&priority=high');
+
+    state.loadingCached = false;
+    fetch(LOCAL_TTS + '/stat?text=' + encodeURIComponent(chunk.text))
+      .then((r) => r.json())
+      .then((j) => { state.loadingCached = !!j.cached; })
+      .catch(() => { /* 忽略 */ });
 
     const audio = new Audio(src);
     audio.volume = Math.max(0, Math.min(1, Number.isFinite(state.volume) ? state.volume : 1));
@@ -1694,7 +1700,7 @@
   }
 
   const LS_LAT = 'dsh-reader.ttslatency';
-  const LS_SAMPLES = 'dsh-reader.ttsSamples';
+  const LS_SAMPLES = 'dsh-reader.ttsSamplesCold';
   let latencyMs = Number(localStorage.getItem(LS_LAT) || 1200) || 1200;
   let latencyLen = 100;
   let latencySamples = [];
@@ -1705,10 +1711,10 @@
     const valid = latencySamples.filter((x) => x && x.ms > 0 && x.len > 0);
     if (valid.length >= 2) {
       const ratios = valid.map((x) => x.ms / x.len).sort((a, b) => a - b);
-      const median = ratios[Math.floor(ratios.length / 2)];
-      return Math.max(500, Math.min(15000, Math.round(median * len + 250)));
+      const p75 = ratios[Math.min(ratios.length - 1, Math.floor(ratios.length * 0.75))];
+      return Math.max(1000, Math.min(15000, Math.round(p75 * len + 250)));
     }
-    return Math.max(500, Math.min(15000, Math.round(latencyMs + len * 8)));
+    return Math.max(1000, Math.min(15000, Math.round(latencyMs + len * 8)));
   }
 
   let loadingTimer = 0;
@@ -1753,6 +1759,7 @@
   // 实际出声后回填耗时，下次估算更准
   function noteLatency() {
     if (!state.loadingT0) return;
+    if (state.loadingCached) { state.loadingT0 = 0; return; }
     const sample = Math.max(150, Math.min(15000, Date.now() - state.loadingT0));
     latencyMs = Math.round(latencyMs * 0.7 + sample * 0.3);
     latencySamples.push({ ms: sample, len: Math.max(10, state.loadingLen || 100) });

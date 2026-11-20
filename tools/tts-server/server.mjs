@@ -187,6 +187,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/stat') {
+    const text = (url.searchParams.get('text') || '').slice(0, 2000);
+    const cached = fs.existsSync(path.join(CACHE_DIR, keyOf(text) + '.mp3'));
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ cached }));
+    return;
+  }
+
   if (url.pathname === '/timings') {
     const text = (url.searchParams.get('text') || '').slice(0, 2000);
     const file = path.join(CACHE_DIR, keyOf(text) + '.timings.json');
