@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.12.7
+// @version      1.12.8
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.12.7';
+  const LOCAL_VERSION = '1.12.8';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -579,6 +579,19 @@
 
   window.__dshPickVoice = pickVoice; // 调试用：在 Console 里看实际会选哪个音色
 
+  // 语音引擎冷启动是"点了朗读要等一下"的一部分：提前念一个静音串把它叫醒。
+  // 浏览器若要求用户手势才能发声，这里会静默失败，不影响正常朗读。
+  function warmUpEngine() {
+    try {
+      const u = new SpeechSynthesisUtterance(' ');
+      u.volume = 0;
+      u.rate = 2;
+      const v = pickVoice();
+      if (v) u.voice = v;
+      synth.speak(u);
+    } catch (err) { /* 忽略 */ }
+  }
+
   /* ---------------- 播放控制 ---------------- */
 
   // 只提前排 2 段：改语速时后面最多 2 段还按旧速度念，绝不回头重读
@@ -586,6 +599,9 @@
   const LOOKAHEAD = 2;
 
   function stop() {
+    // 没在播就别 cancel：cancel() 会把语音引擎打回未初始化状态，
+    // 下一次开口要多等几百毫秒——这正是"点了朗读要等一下"的主要来源。
+    const wasActive = state.playing || synth.speaking || synth.pending;
     state.gen += 1;
     state.playing = false;
     state.paused = false;
@@ -598,7 +614,7 @@
     state.hlChunk = null;
     state.hlSearchPos = 0;
     clearPlayHighlight();
-    synth.cancel();
+    if (wasActive) synth.cancel();
     render();
   }
 
@@ -692,7 +708,9 @@
       return;
     }
     const idx = Math.max(0, Math.min(sentenceIndex, state.sentences.length - 1));
-    synth.cancel();
+    // 只有真的在播时才需要先取消；空闲时 cancel() 反而会让引擎重新初始化，拖慢开口
+    const wasActive = state.playing || synth.speaking || synth.pending;
+    if (wasActive) synth.cancel();
     state.gen += 1;
     const gen = state.gen;
     state.chunks = buildChunksFrom(idx);
@@ -704,9 +722,10 @@
     state.warned = false;
     state.current = null;
     render();
-    setTimeout(() => {
-      if (gen === state.gen) fillQueue(gen);
-    }, 90);
+    // cancel 之后紧跟 speak 可能重放旧队列，这时才需要等一小会儿
+    const delay = wasActive ? 80 : 0;
+    if (delay) setTimeout(() => { if (gen === state.gen) fillQueue(gen); }, delay);
+    else fillQueue(gen);
   }
 
   // 从某个字符偏移处对应的句子开始读
@@ -985,6 +1004,19 @@
       a.style.display = '';
     }
 
+    // 安装完成后回到本页时自动刷新：刷新后页面上跑的才是新版本脚本
+    let pendingReloadAt = 0;
+    function markReloadPending() { pendingReloadAt = Date.now(); }
+    const updateLinkEl = root.querySelector('.dshr-update-link');
+    if (updateLinkEl) updateLinkEl.addEventListener('click', markReloadPending);
+    window.addEventListener('focus', () => {
+      if (!pendingReloadAt) return;
+      if (Date.now() - pendingReloadAt > 5 * 60 * 1000) { pendingReloadAt = 0; return; }
+      pendingReloadAt = 0;
+      toast('刷新页面以加载新版本…');
+      setTimeout(() => location.reload(), 800);
+    });
+
     root.querySelector('[data-act="update"]').addEventListener('click', async (ev) => {
       ev.stopPropagation();
       const a = root.querySelector('.dshr-update-link');
@@ -996,6 +1028,7 @@
           toast('发现 v' + remote + '，正在打开安装页…');
           // 用户手势后几秒内 window.open 通常放行；被拦截时退化为面板里的链接
           const win = window.open(UPDATE_URL, '_blank', 'noopener');
+          markReloadPending();
           if (!win) {
             showUpdateLink(remote);
             toast('发现 v' + remote + '，点面板里的「安装」');
@@ -1528,6 +1561,7 @@
       root.dataset.version = SCRIPT_VERSION;
       render('就绪 · Alt+点击任意消息朗读');
       setTimeout(probeHide, 1800);
+      setTimeout(warmUpEngine, 1200);
     } catch (err) {
       console.error('[dsh-reader] 初始化失败：', err);
       probeNote('初始化失败：' + (err && err.message ? err.message : err), true);
