@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.13.1
+// @version      1.13.2
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.13.1';
+  const LOCAL_VERSION = '1.13.2';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -628,6 +628,8 @@
 
     const audio = new Audio(localUrl(i));
     audio.preload = 'auto';
+    audio.volume = Math.max(0, Math.min(1, Number.isFinite(state.volume) ? state.volume : 1));
+    audio.playbackRate = state.rate || 1;
     state.localAudio = audio;
     state.playing = true;
     state.paused = false;
@@ -1241,6 +1243,11 @@
       if (v === state.rate) return;
       state.rate = v;
       localStorage.setItem(LS_RATE, String(v));
+      // 本地模式：直接改音频播放速度（浏览器会保持音调）
+      if (state.localAudio) {
+        try { state.localAudio.playbackRate = v; } catch (err) { /* 忽略 */ }
+        if (state.local) return;
+      }
       if (!state.playing) return;
       if (!resumeAtBoundary('语速改为 ' + v.toFixed(1) + '，接着念')) {
         toast('语速改为 ' + v.toFixed(1) + '，下一段生效');
@@ -1270,6 +1277,10 @@
       if (v === state.volume) return;
       state.volume = v;
       localStorage.setItem(LS_VOL, String(v));
+      if (state.localAudio) {
+        try { state.localAudio.volume = Math.max(0, Math.min(1, v)); } catch (err) { /* 忽略 */ }
+        if (state.local) return;
+      }
       if (!state.playing) return;
       if (!resumeAtBoundary('音量改为 ' + fmtVol(v) + '，接着念')) {
         toast('音量改为 ' + fmtVol(v) + '，下一段生效');
@@ -1317,6 +1328,10 @@
       state.voiceName = voiceSel.value;
       localStorage.setItem(LS_VOICE, state.voiceName);
       updateVoiceBadge();
+      if (state.local) {
+        toast('本地模式固定云健；换音色请先取消勾选本地语音');
+        return;
+      }
       previewVoice();
     });
 
