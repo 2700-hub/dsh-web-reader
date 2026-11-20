@@ -9,6 +9,39 @@ const VOICE = process.env.DSH_TTS_VOICE || 'zh-CN-YunjianNeural';
 const CACHE_DIR = path.join(os.tmpdir(), 'dsh-tts-cache');
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 
+// 缓存上限：超过 7 天或超过 300MB 就清理，避免临时目录无限增长
+const CACHE_MAX_BYTES = 300 * 1024 * 1024;
+const CACHE_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+let cacheWrites = 0;
+
+function pruneCache() {
+  let entries;
+  try {
+    entries = fs.readdirSync(CACHE_DIR).map((name) => {
+      const full = path.join(CACHE_DIR, name);
+      const st = fs.statSync(full);
+      return { full, size: st.size, mtime: st.mtimeMs };
+    });
+  } catch (err) {
+    return;
+  }
+  const now = Date.now();
+  let total = 0;
+  for (const e of entries) {
+    total += e.size;
+    if (now - e.mtime > CACHE_MAX_AGE_MS) {
+      try { fs.unlinkSync(e.full); total -= e.size; e.gone = true; } catch (err) { /* 忽略 */ }
+    }
+  }
+  if (total > CACHE_MAX_BYTES) {
+    const rest = entries.filter((e) => !e.gone).sort((a, b) => a.mtime - b.mtime);
+    for (const e of rest) {
+      if (total <= CACHE_MAX_BYTES) break;
+      try { fs.unlinkSync(e.full); total -= e.size; } catch (err) { /* 忽略 */ }
+    }
+  }
+}
+
 let MsEdgeTTS;
 let OUTPUT_FORMAT;
 try {
@@ -101,6 +134,8 @@ async function synthBuffer(text) {
     const timings = parseBoundaries(meta);
     try { fs.writeFileSync(file, buffer); } catch (err) { /* 缓存失败不影响播放 */ }
     try { fs.writeFileSync(timingFile, JSON.stringify(timings)); } catch (err) { /* 忽略 */ }
+    cacheWrites += 1;
+    if (cacheWrites % 20 === 0) pruneCache();
     return { buffer, cached: false, timings };
   });
 }
@@ -161,6 +196,7 @@ server.listen(PORT, '127.0.0.1', () => {
     HTTPS_PROXY: process.env.HTTPS_PROXY || null,
     ALL_PROXY: process.env.ALL_PROXY || null,
   }));
+  pruneCache();
   ensureEngine()
     .then(() => console.log('[engine] 就绪（连接已预建）'))
     .catch((e) => console.error('[engine] 失败:', e && (e.stack || e.message) || String(e)));
