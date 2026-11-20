@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.12
+// @version      1.15.13
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.12';
+  const LOCAL_VERSION = '1.15.13';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -103,6 +103,7 @@
     progress: 0,
     local: localStorage.getItem(LS_LOCAL) === '1',
     autoRead: localStorage.getItem(LS_AUTOREAD) === '1',
+    autoQueue: [],
     localReady: false,
     localAudio: null,
     localToken: 0,
@@ -604,6 +605,7 @@
   const LOOKAHEAD = 2;
 
   function stop() {
+    state.autoQueue = [];
     // 没在播就别 cancel：cancel() 会把语音引擎打回未初始化状态，
     // 下一次开口要多等几百毫秒——这正是"点了朗读要等一下"的主要来源。
     const wasActive = state.playing || synth.speaking || synth.pending;
@@ -624,6 +626,17 @@
     render();
   }
 
+  function drainAutoQueue() {
+    if (!state.autoRead || state.playing) return;
+    const item = state.autoQueue.shift();
+    if (!item) return;
+    state.scopeEl = item.scope;
+    state.hlCache = null;
+    playTextFrom(item.text, 0, '新回复');
+  }
+
+  window.__dshDrainAuto = drainAutoQueue; // 调试用
+
   function finish() {
     state.playing = false;
     state.paused = false;
@@ -635,6 +648,7 @@
     clearPlayHighlight();
     clearInterval(state.localTimer);
     render('朗读完成');
+    drainAutoQueue();
   }
 
   /* ---------------- 本地语音（tools/tts-server） ---------------- */
@@ -890,6 +904,15 @@
       return;
     }
     if (state.playing && state.scopeEl && turn.contains(state.scopeEl)) return;
+    // 正在朗读：先排队，读完当前这轮再接着读，不打断
+    if (state.playing) {
+      if (!state.autoQueue.some((q) => q.turn === turn)) {
+        state.autoQueue.push({ turn, scope, text });
+        if (state.autoQueue.length > 5) state.autoQueue.shift();
+      }
+      window.__dshAutoLast = { reason: 'queued', chars: text.length, at: Date.now() };
+      return;
+    }
     window.__dshAutoLast = { reason: 'playing', chars: text.length, at: Date.now() };
     state.scopeEl = scope;
     state.hlCache = null;
