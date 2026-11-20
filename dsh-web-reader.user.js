@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.8
+// @version      1.15.9
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.8';
+  const LOCAL_VERSION = '1.15.9';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -827,24 +827,35 @@
     return { scope, text };
   }
 
-  // 判断这轮是否生成完：dsh 完成后会在回答区挂 [data-actions-reveal]
+  const autoBirth = new WeakMap();
+
+  // 判断这轮是否生成完：dsh 完成后会在回答区挂 [data-actions-reveal]。
+  // 但这个标记可能只在悬停时才出现，所以最多等 8 秒，超时就按文本稳定判断。
   function turnLooksDone(turn) {
     try {
       if (turn.querySelector('[data-actions-reveal]')) return true;
-      if (document.querySelector('[data-actions-reveal]')) return false;
+      if (!document.querySelector('[data-actions-reveal]')) return true;
+      const born = autoBirth.get(turn) || 0;
+      if (Date.now() - born > 8000) return true;
+      return false;
     } catch (err) { /* 忽略 */ }
-    return true; // DOM 里没有这个标记的版本，退回按停顿判断
+    return true;
   }
 
   function maybeAutoRead(turn) {
     if (!state.autoRead) return;
     if (!turnLooksDone(turn)) {
+      window.__dshAutoLast = { reason: 'wait-done-marker', at: Date.now() };
       setTimeout(() => maybeAutoRead(turn), 600);
       return;
     }
     const { scope, text } = autoTextOf(turn);
-    if (!text || text.length < 2) return;
+    if (!text || text.length < 2) {
+      window.__dshAutoLast = { reason: 'no-text', at: Date.now() };
+      return;
+    }
     if (state.playing && state.scopeEl && turn.contains(state.scopeEl)) return;
+    window.__dshAutoLast = { reason: 'playing', chars: text.length, at: Date.now() };
     state.scopeEl = scope;
     state.hlCache = null;
     playTextFrom(text, 0, '新回复');
@@ -853,6 +864,7 @@
   function watchTurn(turn) {
     if (!turn || autoSeen.has(turn)) return;
     autoSeen.add(turn);
+    autoBirth.set(turn, Date.now());
     const scope = scopeOfTurn(turn) || turn;
     let lastLen = (scope.innerText || '').length;
     let timer = 0;
