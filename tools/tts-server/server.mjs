@@ -49,14 +49,13 @@ function enqueue(fn) {
   return run;
 }
 
-// 边合成边把数据块交给调用方：首字延迟取决于云端的首包，而不是整段合成时间
-async function streamText(text, onChunk) {
+// 合成一段并返回完整 Buffer（带 content-length，浏览器能可靠地开始播放；
+// 流式响应虽然首字更早，但没有长度时 Chrome 会一直缓冲，实测反而更慢）
+async function synthBuffer(text) {
   const key = keyOf(text);
   const file = path.join(CACHE_DIR, key + '.mp3');
   if (fs.existsSync(file)) {
-    const buf = fs.readFileSync(file);
-    onChunk(buf);
-    return { cached: true, bytes: buf.length };
+    return { buffer: fs.readFileSync(file), cached: true };
   }
 
   return enqueue(async () => {
@@ -65,20 +64,11 @@ async function streamText(text, onChunk) {
     const stream = res.audioStream || res;
 
     const chunks = [];
-    let bytes = 0;
     try {
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('合成超时')), 20000);
-        stream.on('data', (d) => {
-          chunks.push(d);
-          bytes += d.length;
-          try { onChunk(d); } catch (err) { /* 客户端断开 */ }
-        });
-        stream.on('end', () => {
-          clearTimeout(timer);
-          try { fs.writeFileSync(file, Buffer.concat(chunks)); } catch (err) { /* 缓存失败不影响播放 */ }
-          resolve();
-        });
+        stream.on('data', (d) => chunks.push(d));
+        stream.on('end', () => { clearTimeout(timer); resolve(); });
         stream.on('error', (e) => {
           clearTimeout(timer);
           const msg = e && (e.stack || e.message) ? (e.stack || e.message) : String(e && e.code ? e.code : e);
@@ -89,7 +79,9 @@ async function streamText(text, onChunk) {
       resetEngine();
       throw err;
     }
-    return { cached: false, bytes };
+    const buffer = Buffer.concat(chunks);
+    try { fs.writeFileSync(file, buffer); } catch (err) { /* 缓存失败不影响播放 */ }
+    return { buffer, cached: false };
   });
 }
 
@@ -108,14 +100,15 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/tts') {
     const text = (url.searchParams.get('text') || '').slice(0, 2000);
     if (!text.trim()) { res.writeHead(400); res.end('text required'); return; }
-    res.writeHead(200, {
-      'content-type': 'audio/mpeg',
-      'cache-control': 'public, max-age=86400',
-    });
     try {
-      const r = await streamText(text, (buf) => res.write(buf));
-      res.end();
-      console.log(`[tts] ${text.slice(0, 18)}… ${r.bytes} bytes${r.cached ? ' (缓存)' : ''}`);
+      const r = await synthBuffer(text);
+      res.writeHead(200, {
+        'content-type': 'audio/mpeg',
+        'content-length': r.buffer.length,
+        'cache-control': 'public, max-age=86400',
+      });
+      res.end(r.buffer);
+      console.log(`[tts] ${text.slice(0, 18)}… ${r.buffer.length} bytes${r.cached ? ' (缓存)' : ''}`);
     } catch (err) {
       console.error('[tts] 失败:', (err && (err.stack || err.message)) || String(err));
       try { res.end(); } catch (e) { /* 忽略 */ }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.13.5
+// @version      1.13.6
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.13.5';
+  const LOCAL_VERSION = '1.13.6';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -700,6 +700,13 @@
     localPrefetch(c + 1);
   }
 
+  // 本地模式：首段只放第一句，让声音尽快出来；后面再按 150 字合并
+  function localBuildChunks(idx) {
+    const first = state.sentences[idx];
+    if (!first) return [];
+    return [{ text: first, from: idx, to: idx + 1 }].concat(buildChunksFrom(idx + 1, 150));
+  }
+
   // 一段一个音频：当前段播的时候，后两段已经在本地备好
   function localPlay(c) {
     const token = ++state.localToken;
@@ -811,7 +818,7 @@
     if (wasActive) synth.cancel();
     state.gen += 1;
     const gen = state.gen;
-    state.chunks = buildChunksFrom(idx, 150);
+    state.chunks = localBuildChunks(idx);
     state.index = 0;
     state.progress = idx;
     state.queued = 0;
@@ -850,7 +857,7 @@
         startFrom(idx);
         return;
       }
-      state.chunks = buildChunksFrom(idx, 150);
+      state.chunks = localBuildChunks(idx);
       state.queued = 0;
       localPlay(0);
       return;
@@ -1221,7 +1228,7 @@
       if (state.local) {
         if (!state.localReady) { toast('本地语音服务未启动'); return; }
         stop();
-        state.chunks = buildChunksFrom(i, 150);
+        state.chunks = localBuildChunks(i);
         state.queued = 0;
         localPlay(0);
         toast('从第 ' + (i + 1) + ' / ' + state.sentences.length + ' 句开始');
