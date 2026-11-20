@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.2
+// @version      1.15.3
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.2';
+  const LOCAL_VERSION = '1.15.3';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -59,6 +59,11 @@
 
   const TURN_SEL = '[data-chat-turn]';
   const ANSWER_SEL = '[data-turn-process-answer]';
+  // 思考/推理区域：自动朗读时排除，避免把过程当答案念
+  const EXCLUDE_SEL = [
+    '[data-turn-process-think]', '[data-turn-process-reasoning]', '[data-reasoning]',
+    '[class*="reasoning"]', '[class*="thinking"]', '[class*="think-"]', 'details',
+  ].join(',');
   const LS_RATE = 'dsh-reader.rate';
   const LS_VOICE = 'dsh-reader.voice';
   const LS_VOL = 'dsh-reader.volume';
@@ -784,13 +789,28 @@
 
   function autoTextOf(turn) {
     const scope = scopeOfTurn(turn) || turn;
-    const blocks = collectBlocks(scope);
-    const text = blocks.length ? textFromBlocks(blocks) : (scope.innerText || '').trim();
+    const blocks = collectBlocks(scope).filter((b) => {
+      try { return !b.el.closest(EXCLUDE_SEL); } catch (err) { return true; }
+    });
+    const text = blocks.length ? textFromBlocks(blocks) : '';
     return { scope, text };
+  }
+
+  // 判断这轮是否生成完：dsh 完成后会在回答区挂 [data-actions-reveal]
+  function turnLooksDone(turn) {
+    try {
+      if (turn.querySelector('[data-actions-reveal]')) return true;
+      if (document.querySelector('[data-actions-reveal]')) return false;
+    } catch (err) { /* 忽略 */ }
+    return true; // DOM 里没有这个标记的版本，退回按停顿判断
   }
 
   function maybeAutoRead(turn) {
     if (!state.autoRead) return;
+    if (!turnLooksDone(turn)) {
+      setTimeout(() => maybeAutoRead(turn), 600);
+      return;
+    }
     const { scope, text } = autoTextOf(turn);
     if (!text || text.length < 2) return;
     if (state.playing && state.scopeEl && turn.contains(state.scopeEl)) return;
@@ -810,7 +830,7 @@
       if (len === lastLen) return;
       lastLen = len;
       clearTimeout(timer);
-      timer = setTimeout(() => maybeAutoRead(turn), 1500); // 生成停顿 1.5 秒再读
+      timer = setTimeout(() => maybeAutoRead(turn), 2000); // 生成停顿 2 秒再读（避开思考阶段）
     });
     obs.observe(scope, { childList: true, subtree: true, characterData: true });
   }
