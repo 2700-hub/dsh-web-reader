@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.12.1
+// @version      1.12.2
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,13 +24,15 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.12.1';
+  const LOCAL_VERSION = '1.12.2';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
 
   // 更新检查：拉取仓库 main 上的脚本，比对 @version
   const UPDATE_URL = 'https://raw.githubusercontent.com/2700-hub/dsh-web-reader/main/dsh-web-reader.user.js';
+  // raw 有 CDN 缓存（几分钟）；API 读的是当前 main 的真实内容，用于「立刻」检查
+  const UPDATE_API = 'https://api.github.com/repos/2700-hub/dsh-web-reader/contents/dsh-web-reader.user.js?ref=main';
 
   function compareVersions(a, b) {
     const A = String(a).split('.').map(Number);
@@ -755,6 +757,10 @@
       #dsh-reader .dshr-voicebadge { margin-top: 8px; font-size: 12px; padding: 4px 8px;
         border-radius: 8px; background: rgba(107,138,253,.16); border: 1px solid rgba(107,138,253,.5); }
       #dsh-reader .dshr-voicebadge b { color: #a9c0ff; }
+      #dsh-reader .dshr-update-link { flex: 1; text-align: center; text-decoration: none;
+        color: #a9c0ff; border: 1px solid rgba(107,138,253,.6); border-radius: 8px;
+        padding: 4px 6px; background: rgba(107,138,253,.12); }
+      #dsh-reader .dshr-update-link:hover { background: rgba(107,138,253,.22); }
       #dsh-reader .dshr-kbd { opacity: .55; font-size: 11px; margin-top: 6px; }
       #dsh-reader .dshr-pop { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px);
         background: rgba(24,26,31,.98); border: 1px solid rgba(255,255,255,.16);
@@ -791,6 +797,7 @@
         <div class="dshr-status">就绪 · Alt+点击任意消息朗读</div>
         <div class="dshr-cur"></div>
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
+        <div class="dshr-row"><a class="dshr-update-link" target="_blank" rel="noopener" style="display:none">安装新版</a></div>
         <div class="dshr-row"><select class="dshr-voice"></select></div>
         <div class="dshr-kbd">Alt+点击正文从该句读 · Alt+X 停止 · Alt+P 面板</div>
       </div>
@@ -878,22 +885,52 @@
       toast('面板已关闭，Alt+P 可找回');
     });
 
-    // 检查更新：拉 main 分支的脚本，比对 @version
+    // 检查更新：优先 GitHub API（无 CDN 延迟），失败退回 raw
+    async function fetchRemoteVersion() {
+      try {
+        const res = await fetch(UPDATE_API, {
+          headers: { Accept: 'application/vnd.github.raw' },
+          cache: 'no-store',
+        });
+        if (res.ok) {
+          const text = await res.text();
+          const m = /\/\/\s*@version\s+([\d.]+)/.exec(text);
+          if (m) return m[1];
+        }
+      } catch (err) { /* 忽略，走 raw 回退 */ }
+      const res = await fetch(UPDATE_URL + '?t=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const text = await res.text();
+      const m = /\/\/\s*@version\s+([\d.]+)/.exec(text);
+      if (!m) throw new Error('解析版本号失败');
+      return m[1];
+    }
+
+    function showUpdateLink(remote) {
+      const a = root.querySelector('.dshr-update-link');
+      if (!a) return;
+      a.href = UPDATE_URL + '?t=' + Date.now();
+      a.textContent = '安装 v' + remote;
+      a.style.display = '';
+    }
+
     root.querySelector('[data-act="update"]').addEventListener('click', async (ev) => {
       ev.stopPropagation();
+      const a = root.querySelector('.dshr-update-link');
+      if (a) a.style.display = 'none';
       toast('正在检查更新…');
       try {
-        const res = await fetch(UPDATE_URL + '?t=' + Date.now(), { cache: 'no-store' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const text = await res.text();
-        const m = /\/\/\s*@version\s+([\d.]+)/.exec(text);
-        if (!m) throw new Error('解析版本号失败');
-        const remote = m[1];
+        const remote = await fetchRemoteVersion();
         if (compareVersions(remote, SCRIPT_VERSION) > 0) {
           toast('发现 v' + remote + '，正在打开安装页…');
-          window.open(UPDATE_URL, '_blank', 'noopener');
+          // 用户手势后几秒内 window.open 通常放行；被拦截时退化为面板里的链接
+          const win = window.open(UPDATE_URL, '_blank', 'noopener');
+          if (!win) {
+            showUpdateLink(remote);
+            toast('发现 v' + remote + '，点面板里的「安装」');
+          }
         } else {
-          toast('已是最新版本 v' + SCRIPT_VERSION);
+          toast('已是最新版本 v' + SCRIPT_VERSION + '（远程 ' + remote + '）');
         }
       } catch (err) {
         toast('检查更新失败：' + (err && err.message ? err.message : err));
