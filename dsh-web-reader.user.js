@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.11
+// @version      1.15.12
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.11';
+  const LOCAL_VERSION = '1.15.12';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -62,7 +62,10 @@
   // 思考/推理区域：自动朗读时排除，避免把过程当答案念
   const EXCLUDE_SEL = [
     '[data-turn-process-think]', '[data-turn-process-reasoning]', '[data-reasoning]',
-    '[class*="reasoning"]', '[class*="thinking"]', '[class*="think-"]', 'details',
+    '[class*="reasoning"]', '[class*="thinking"]', '[class*="think-"]',
+    '[class*="thought"]', '[class*="Thought"]', '[class*="cot"]', '[class*="inner-think"]',
+    '[data-testid*="think"]', '[data-testid*="reason"]', '[data-node*="reason"]',
+    'details',
     '[data-usage]', '[class*="usage"]', '[class*="token"]', '[class*="Token"]',
     '[data-actions-reveal]', '[data-actions]', '[class*="action-bar"]', '[class*="toolbar"]',
   ].join(',');
@@ -71,7 +74,7 @@
   // 提问/用户消息：自动朗读从回答首句开始，不把它们带进来
   const USER_SEL = '[data-role="user"], [data-turn-user], [class*="user-message"], [class*="user-query"], [class*="question"]';
 
-  const META_TEXT_RE = /(tokens?\s*[:：]?\s*[\d,.]|token\s*用量|上下文|context\s*(usage|window)|生成耗时|耗时\s*[:：]?\s*[\d.]|模型\s*[:：]|model\s*[:：]|用时\s*[\d.]+\s*(s|秒))/i;
+  const META_TEXT_RE = /(tokens?\s*[:：]?\s*[\d,.]|token\s*用量|上下文|context\s*(usage|window)|生成耗时|耗时\s*[:：]?\s*[\d.]|模型\s*[:：]|model\s*[:：]|用时\s*[\d.]+\s*(s|秒)|^(已?深度思考|已思考|思考中|正在思考|Thinking|Reasoning)|思考了\s*[\d.]+\s*秒)/i;
 
   function looksLikeMeta(text) {
     const t = String(text || '').trim();
@@ -821,6 +824,28 @@
   }
 
   /* ---------------- 自动朗读新回复 ---------------- */
+
+  // 调试用：列出最近一条回复里所有块，以及每块是否被排除
+  window.__dshDebugTurn = () => {
+    const turn = lastTurn();
+    if (!turn) return '没有找到消息';
+    const scope = scopeOfTurn(turn) || turn;
+    return collectBlocks(scope).map((b) => {
+      const el = b.el;
+      let reason = '';
+      try {
+        const hit = el.closest(EXCLUDE_SEL);
+        if (hit) reason = '选择器排除: ' + (hit.getAttribute('class') || hit.tagName);
+        else if (looksLikeMeta(el.innerText || el.textContent || '')) reason = '内容判定为界面文字';
+      } catch (err) { reason = '判定异常'; }
+      return {
+        tag: el.tagName,
+        cls: String(el.className || ''),
+        text: (el.innerText || el.textContent || '').slice(0, 40),
+        reason: reason || '会被朗读',
+      };
+    });
+  };
 
   const autoSeen = new WeakSet();
   let autoObserver = null;

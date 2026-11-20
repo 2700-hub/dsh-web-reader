@@ -31,6 +31,45 @@ git push --follow-tags origin main
 
 ---
 
+## [1.15.12] - 2026-11-20
+
+### 变更
+
+- 扩大思考区域过滤范围，新增诊断命令 `window.__dshDebugTurn()`
+
+### 修复
+
+- 自动朗读偶尔仍会读到思考内容（选择器覆盖不到真实类名）
+
+### 技术说明
+
+之前的过滤规则是**猜类名**写的（`data-reasoning`、`class*="reasoning"` 等）。
+dsh 实际用的标记如果不同，就会漏。
+
+这一版：
+
+- 补充 `[class*="thought"]`、`[class*="cot"]`、`[class*="inner-think"]`、
+  `[data-testid*="think"]`、`[data-testid*="reason"]` 等
+- 内容判定增加：「已深度思考 / 思考中 / 思考了 N 秒 / Thinking / Reasoning」开头的块
+- 新增诊断：
+
+```js
+window.__dshDebugTurn()
+```
+
+返回最近一条回复里每个块的信息：
+
+```json
+[
+  { "tag": "P", "text": "这是思考…", "reason": "选择器排除: thought-content" },
+  { "tag": "P", "text": "这是回答…", "reason": "会被朗读" }
+]
+```
+
+以后再有"读错内容"，把这条命令的输出发出来，就能直接定位是哪个元素、为什么没被排除。
+
+---
+
 ## [1.15.11] - 2026-11-20
 
 ### 修复
