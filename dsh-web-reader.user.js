@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.12.6
+// @version      1.12.7
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.12.6';
+  const LOCAL_VERSION = '1.12.7';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -250,6 +250,7 @@
     const d = docOf(block);
     const walker = d.createTreeWalker(block, NodeFilter.SHOW_TEXT);
     let node;
+    const candidates = [];
     while ((node = walker.nextNode())) {
       const len = (node.textContent || '').length;
       if (!len) continue;
@@ -259,13 +260,29 @@
       const rects = Array.prototype.slice.call(r.getClientRects());
       for (let i = 0; i < rects.length; i += 1) {
         const rect = rects[i];
+        if (rect.width <= 0 || rect.height <= 0) continue;
         if (y >= rect.top - 2 && y <= rect.bottom + 2 && x >= rect.left - 60 && x <= rect.right + 60) {
           return { node, rect, block };
         }
+        candidates.push({ node, rect, block });
       }
     }
-    return null;
+    // 点在行与行之间的缝里时，取垂直距离最近的一行（否则会退回从头读）
+    let best = null;
+    let bestScore = Infinity;
+    for (const c of candidates) {
+      const cy = (c.rect.top + c.rect.bottom) / 2;
+      const farX = x < c.rect.left - 80 || x > c.rect.right + 80;
+      const score = Math.abs(cy - y) + (farX ? 40 : 0) + (cy < y ? 0.5 : 0); // 缝隙里优先取下一行
+      if (score < bestScore) { bestScore = score; best = c; }
+    }
+    return bestScore <= 60 ? best : null;
   }
+
+  window.__dshLineAt = (x, y) => {
+    const hit = lineRectAt(x, y, document);
+    return hit ? { top: hit.rect.top, bottom: hit.rect.bottom, left: hit.rect.left, right: hit.rect.right, block: hit.block.tagName } : null;
+  };
 
   // 行首字符在该文本节点里的下标
   function lineStartOf(node, rect) {
@@ -284,13 +301,51 @@
     return 0;
   }
 
+  // 鼠标位置对应的文本插入点（比按行矩形猜更准，行距缝隙里也能落到位）
+  function caretAt(x, y, doc) {
+    const d = doc || document;
+    try {
+      if (typeof d.caretPositionFromPoint === 'function') {
+        const p = d.caretPositionFromPoint(x, y);
+        if (p && p.offsetNode) return { node: p.offsetNode, offset: p.offset };
+      }
+      if (typeof d.caretRangeFromPoint === 'function') {
+        const r = d.caretRangeFromPoint(x, y);
+        if (r && r.startContainer) return { node: r.startContainer, offset: r.startOffset };
+      }
+    } catch (err) { /* 忽略 */ }
+    return null;
+  }
+
   // 行首 → 全文偏移
   function offsetOfLineAtPoint(x, y, blocks, doc) {
+    // 优先用浏览器自己的命中结果：它会把坐标吸附到最近的文字位置
+    const caret = caretAt(x, y, doc || document);
+    if (caret && caret.node) {
+      for (let i = 0; i < blocks.length; i += 1) {
+        const block = blocks[i];
+        if (block.el === caret.node || block.el.contains(caret.node)) {
+          try {
+            const cr = docOf(block.el).createRange();
+            cr.selectNodeContents(block.el);
+            cr.setEnd(caret.node, Math.min(caret.offset, (caret.node.textContent || '').length));
+            return block.start + cr.toString().length;
+          } catch (err) { /* 落到下面的矩形法 */ }
+        }
+      }
+    }
+
     const hit = lineRectAt(x, y, doc);
     if (!hit) return null;
     let block = null;
     for (let i = 0; i < blocks.length; i += 1) {
       if (blocks[i].el === hit.block || blocks[i].el.contains(hit.block)) { block = blocks[i]; break; }
+    }
+    // 命中的块比收集到的块更靠外（比如点到了包裹层）时，取它里面第一个块
+    if (!block) {
+      for (let i = 0; i < blocks.length; i += 1) {
+        if (hit.block.contains(blocks[i].el)) { block = blocks[i]; break; }
+      }
     }
     if (!block) return null;
     try {
@@ -1310,6 +1365,7 @@
       state.scopeEl = scope;
       state.hlCache = null;
       let offset = offsetOfLineAtPoint(e.clientX, e.clientY, blocks, d);
+      if (offset === null || offset === undefined) offset = offsetOfBlockAtPoint(e.clientX, e.clientY, blocks, d);
       if (offset === null || offset === undefined) offset = 0;
       playTextFrom(text, offset, '这段内容');
       return;
