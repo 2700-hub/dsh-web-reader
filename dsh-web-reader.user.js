@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.12.0
+// @version      1.12.1
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.12.0';
+  const LOCAL_VERSION = '1.12.1';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -73,6 +73,7 @@
     volume: Number(localStorage.getItem(LS_VOL) ?? 1),
     playing: false,
     paused: false,
+    pausedAt: 0,
     warned: false,
     gen: 0,
     current: null,
@@ -578,12 +579,15 @@
 
     u.onend = () => {
       if (gen !== state.gen || !state.playing) return;
+      // 暂停期间收到的 onend 不可信，别让它把播放推进/结束
+      if (state.paused) return;
       if (i >= state.chunks.length - 1) { finish(); return; }
       fillQueue(gen);
     };
 
     u.onerror = (e) => {
       if (gen !== state.gen) return;
+      if (state.paused) return;
       if (e.error === 'interrupted' || e.error === 'canceled') return;
       if (!state.warned) {
         state.warned = true;
@@ -654,25 +658,53 @@
     playTextFrom(text, 0, label);
   }
 
+  // 长暂停后 Chrome 的 resume() 经常静默失效：speaking 仍为 true、paused 卡住。
+  // 超过 8 秒的暂停不走 resume，直接取消并从当前段重排。
+  const LONG_PAUSE_MS = 8000;
+
+  function hardResume(reason) {
+    const cur = state.chunks[state.index];
+    const from = cur ? cur.from : 0;
+    startFrom(from);
+    if (reason) toast(reason);
+  }
+
   function togglePause() {
-    if (!state.playing) return;
+    if (!state.playing) {
+      // 播放状态被意外中断（比如暂停期间收到 onend）时，按钮也能把声音拉回来
+      if (state.chunks.length && state.index < state.chunks.length) {
+        hardResume('继续播放');
+      }
+      return;
+    }
     if (state.paused) {
+      const pausedFor = Date.now() - (state.pausedAt || 0);
       state.paused = false;
+      state.pausedAt = 0;
+
+      if (pausedFor > LONG_PAUSE_MS) {
+        hardResume('已从当前段恢复');
+        return;
+      }
+
       synth.resume();
       render();
-      // Chrome 暂停久了 resume() 会静默失效：没声音就从当前段重新开口
+      // 部分浏览器要连按两次 resume 才动
+      setTimeout(() => {
+        if (state.playing && !state.paused && synth.paused) synth.resume();
+      }, 200);
+
       const gen = state.gen;
       setTimeout(() => {
         if (gen !== state.gen || !state.playing || state.paused) return;
-        if (!synth.speaking && !synth.pending) {
-          const cur = state.chunks[state.index];
-          startFrom(cur ? cur.from : 0);
-          toast('已从当前段恢复');
+        if (!synth.speaking || synth.paused) {
+          hardResume('已从当前段恢复');
         }
-      }, 1200);
+      }, 1000);
     } else {
       synth.pause();
       state.paused = true;
+      state.pausedAt = Date.now();
       state.autoScrollAt = Date.now();
       clearTimeout(state.scrollTimer);
       render('已暂停');
