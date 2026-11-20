@@ -31,6 +31,34 @@ git push --follow-tags origin main
 
 ---
 
+## [1.16.0] - 2026-11-20
+
+### 变更
+
+- **移除「自动朗读新回复」功能**，面板不再有该开关
+- 同时移除相关的思考/界面文字过滤、队列、诊断接口
+
+### 技术说明
+
+移除原因：这个功能依赖"识别回答区域、排除思考链"的 DOM 选择器，
+而 dsh 的真实标记无法稳定获取——反复出现"把思考当正文读"，修了多版仍不稳定。
+
+与其保留一个时好时坏的功能，不如去掉。现在的行为回到：
+
+- 手动 `Alt + 点击` 朗读，读你点的那一块（不做隐藏内容的过滤）
+- 没有后台监听、没有自动排队
+
+删除内容：
+
+- `自动朗读新回复` 复选框与 `LS_AUTOREAD`
+- `startAutoRead` / `watchTurn` / `maybeAutoRead` / `drainAutoQueue`
+- `EXCLUDE_SEL` / `USER_SEL` / `looksLikeMeta`
+- `__dshAutoLast` / `__dshQueueDump` / `__dshDrainAuto` / `__dshDebugTurn`
+
+如果以后拿到稳定的 DOM 结构，可以再把这个功能按正确的方式加回来。
+
+---
+
 ## [1.15.18] - 2026-11-20
 
 ### 变更

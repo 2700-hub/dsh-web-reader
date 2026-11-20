@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.18
+// @version      1.16.0
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.18';
+  const LOCAL_VERSION = '1.16.0';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -59,37 +59,10 @@
 
   const TURN_SEL = '[data-chat-turn]';
   const ANSWER_SEL = '[data-turn-process-answer]';
-  // 思考/推理区域：自动朗读时排除，避免把过程当答案念
-  const EXCLUDE_SEL = [
-    '[data-turn-process-think]', '[data-turn-process-reasoning]', '[data-reasoning]',
-    '[class*="reasoning"]', '[class*="thinking"]', '[class*="think-"]',
-    '[class*="thought"]', '[class*="Thought"]', '[class*="cot"]', '[class*="inner-think"]',
-    '[data-testid*="think"]', '[data-testid*="reason"]', '[data-node*="reason"]',
-    'details',
-    '[data-usage]', '[class*="usage"]', '[class*="token"]', '[class*="Token"]',
-    '[data-actions-reveal]', '[data-actions]', '[class*="action-bar"]', '[class*="toolbar"]',
-  ].join(',');
-
-  // 界面文字（token 用量、耗时、模型名等）：即使被当成块也要排除
-  // 提问/用户消息：自动朗读从回答首句开始，不把它们带进来
-  const USER_SEL = '[data-role="user"], [data-turn-user], [class*="user-message"], [class*="user-query"], [class*="question"]';
-
-  const META_TEXT_RE = /(tokens?\s*[:：]?\s*[\d,.]|token\s*用量|上下文|context\s*(usage|window)|生成耗时|耗时\s*[:：]?\s*[\d.]|模型\s*[:：]|model\s*[:：]|用时\s*[\d.]+\s*(s|秒)|^(已?深度思考|已思考|思考中|正在思考|Thinking|Reasoning)|思考了\s*[\d.]+\s*秒)/i;
-
-  function looksLikeMeta(text) {
-    const t = String(text || '').trim();
-    if (!t) return true;
-    if (META_TEXT_RE.test(t)) return true;
-    const cjk = (t.match(/[\u4e00-\u9fa5]/g) || []).length;
-    if (cjk < 2) return true;                       // 纯数字/符号
-    if (cjk < 6 && !/[。！？!?，,.]/.test(t)) return true; // 太短又没有标点
-    return false;
-  }
   const LS_RATE = 'dsh-reader.rate';
   const LS_VOICE = 'dsh-reader.voice';
   const LS_VOL = 'dsh-reader.volume';
   const LS_LOCAL = 'dsh-reader.local';
-  const LS_AUTOREAD = 'dsh-reader.autoread';
   // 本地语音服务（tools/tts-server 启动后监听这个地址）
   const LOCAL_TTS = 'http://127.0.0.1:5050';
   const CHUNK_CHARS = 300;
@@ -102,9 +75,6 @@
     queued: 0,
     progress: 0,
     local: localStorage.getItem(LS_LOCAL) === '1',
-    autoRead: localStorage.getItem(LS_AUTOREAD) === '1',
-    autoQueue: [],
-    lastAutoText: '',
     localReady: false,
     localAudio: null,
     localToken: 0,
@@ -605,8 +575,7 @@
   // 提前排 2 段（当前 + 前方 1 段）：既不断句，改语速时等一两段就生效
   const LOOKAHEAD = 2;
 
-  function stop(keepQueue) {
-    if (!keepQueue) state.autoQueue = [];
+  function stop() {
     // 没在播就别 cancel：cancel() 会把语音引擎打回未初始化状态，
     // 下一次开口要多等几百毫秒——这正是"点了朗读要等一下"的主要来源。
     const wasActive = state.playing || synth.speaking || synth.pending;
@@ -627,22 +596,6 @@
     render();
   }
 
-  function drainAutoQueue() {
-    if (!state.autoRead || state.playing) return;
-    const item = state.autoQueue.shift();
-    if (!item) return;
-    if (!item.turn || !item.turn.isConnected) { state.autoQueue = []; return; }
-    if (item.text === state.lastAutoText) { drainAutoQueue(); return; }
-    if (Date.now() - (item.at || 0) > 3 * 60 * 1000) { drainAutoQueue(); return; }
-    state.scopeEl = item.scope;
-    state.hlCache = null;
-    state.lastAutoText = item.text;
-    playTextFrom(item.text, 0, '新回复', true);
-  }
-
-  window.__dshDrainAuto = drainAutoQueue; // 调试用
-  window.__dshQueueDump = () => state.autoQueue.map((q) => ({ at: q.at, text: String(q.text || '').slice(0, 120) }));
-
   function finish() {
     localStop();
     state.playing = false;
@@ -655,7 +608,6 @@
     clearPlayHighlight();
     clearInterval(state.localTimer);
     render('朗读完成');
-    drainAutoQueue();
   }
 
   /* ---------------- 本地语音（tools/tts-server） ---------------- */
@@ -845,150 +797,6 @@
     localAudioFor(c, token);
   }
 
-  /* ---------------- 自动朗读新回复 ---------------- */
-
-  // 调试用：列出最近一条回复里所有块，以及每块是否被排除
-  window.__dshDebugTurn = () => {
-    const turn = lastTurn();
-    if (!turn) return '没有找到消息';
-    const scope = scopeOfTurn(turn) || turn;
-    return collectBlocks(scope).map((b) => {
-      const el = b.el;
-      let reason = '';
-      try {
-        const hit = el.closest(EXCLUDE_SEL);
-        if (hit) reason = '选择器排除: ' + (hit.getAttribute('class') || hit.tagName);
-        else if (looksLikeMeta(el.innerText || el.textContent || '')) reason = '内容判定为界面文字';
-      } catch (err) { reason = '判定异常'; }
-      return {
-        tag: el.tagName,
-        cls: String(el.className || ''),
-        text: (el.innerText || el.textContent || '').slice(0, 40),
-        reason: reason || '会被朗读',
-      };
-    });
-  };
-
-  const autoSeen = new WeakSet();
-  let autoObserver = null;
-
-  function autoTextOf(turn) {
-    const scope = scopeOfTurn(turn) || turn;
-    const blocks = collectBlocks(scope).filter((b) => {
-      try {
-        if (b.el.closest(EXCLUDE_SEL + ',' + USER_SEL)) return false;
-        return !looksLikeMeta(b.el.innerText || b.el.textContent || '');
-      } catch (err) { return true; }
-    });
-    const text = blocks.length ? textFromBlocks(blocks) : '';
-    return { scope, text };
-  }
-
-  const autoBirth = new WeakMap();
-
-  // 判断这轮是否生成完：dsh 完成后会在回答区挂 [data-actions-reveal]。
-  // 但这个标记可能只在悬停时才出现，所以最多等 8 秒，超时就按文本稳定判断。
-  function turnLooksDone(turn) {
-    try {
-      if (turn.querySelector('[data-actions-reveal]')) return true;
-      if (!document.querySelector('[data-actions-reveal]')) return true;
-      const born = autoBirth.get(turn) || 0;
-      if (Date.now() - born > 8000) return true;
-      return false;
-    } catch (err) { /* 忽略 */ }
-    return true;
-  }
-
-  function maybeAutoRead(turn) {
-    if (!state.autoRead) return;
-    if (!turnLooksDone(turn)) {
-      window.__dshAutoLast = { reason: 'wait-done-marker', at: Date.now() };
-      setTimeout(() => maybeAutoRead(turn), 600);
-      return;
-    }
-    const { scope, text } = autoTextOf(turn);
-    if (!text || text.length < 2) {
-      window.__dshAutoLast = { reason: 'no-text', at: Date.now() };
-      return;
-    }
-    if (state.playing && state.scopeEl && turn.contains(state.scopeEl)) return;
-    if (text === state.lastAutoText) return;
-    // 正在朗读：先排队，读完当前这轮再接着读，不打断
-    if (state.playing) {
-      const dup = state.autoQueue.some((q) => q.text === text);
-      if (!dup) {
-        state.autoQueue.push({ turn, scope, text, at: Date.now() });
-        if (state.autoQueue.length > 5) state.autoQueue.shift();
-      }
-      window.__dshAutoLast = {
-        reason: 'queued',
-        chars: text.length,
-        head: text.slice(0, 120),
-        blocks: collectBlocks(scope).slice(0, 6).map((b) => ({
-          tag: b.el.tagName,
-          cls: String(b.el.className || '').slice(0, 60),
-          text: (b.el.innerText || '').slice(0, 40),
-          excluded: (() => { try { return !!b.el.closest(EXCLUDE_SEL + ',' + USER_SEL) || looksLikeMeta(b.el.innerText || ''); } catch (e) { return false; } })(),
-        })),
-        at: Date.now(),
-      };
-      return;
-    }
-    state.lastAutoText = text;
-    // 记录本次朗读抓到的原文与前几个块，方便定位"为什么读了思考"
-    try {
-      window.__dshAutoLast = {
-        reason: 'playing',
-        chars: text.length,
-        head: text.slice(0, 120),
-        blocks: collectBlocks(scope).slice(0, 6).map((b) => ({
-          tag: b.el.tagName,
-          cls: String(b.el.className || '').slice(0, 60),
-          text: (b.el.innerText || '').slice(0, 40),
-          excluded: (() => { try { return !!b.el.closest(EXCLUDE_SEL + ',' + USER_SEL) || looksLikeMeta(b.el.innerText || ''); } catch (e) { return false; } })(),
-        })),
-        at: Date.now(),
-      };
-    } catch (e) { window.__dshAutoLast = { reason: 'playing', chars: text.length }; }
-    state.scopeEl = scope;
-    state.hlCache = null;
-    playTextFrom(text, 0, '新回复');
-  }
-
-  function watchTurn(turn) {
-    if (!turn || autoSeen.has(turn)) return;
-    autoSeen.add(turn);
-    autoBirth.set(turn, Date.now());
-    const scope = scopeOfTurn(turn) || turn;
-    let lastLen = (scope.innerText || '').length;
-    let timer = 0;
-    const obs = new MutationObserver(() => {
-      const len = (scope.innerText || '').length;
-      if (len === lastLen) return;
-      lastLen = len;
-      clearTimeout(timer);
-      timer = setTimeout(() => maybeAutoRead(turn), 2000); // 生成停顿 2 秒再读（避开思考阶段）
-    });
-    obs.observe(scope, { childList: true, subtree: true, characterData: true });
-    // 内容一次性出现（没有后续变化）时，也要有一次初始检查
-    setTimeout(() => maybeAutoRead(turn), 1500);
-  }
-
-  function startAutoRead() {
-    if (autoObserver) return;
-    document.querySelectorAll(TURN_SEL).forEach((t) => autoSeen.add(t));
-    autoObserver = new MutationObserver((muts) => {
-      muts.forEach((m) => {
-        m.addedNodes.forEach((n) => {
-          if (!n || n.nodeType !== 1) return;
-          if (n.matches && n.matches(TURN_SEL)) watchTurn(n);
-          if (n.querySelectorAll) n.querySelectorAll(TURN_SEL).forEach(watchTurn);
-        });
-      });
-    });
-    autoObserver.observe(document.body, { childList: true, subtree: true });
-  }
-
   function localPing() {
     return fetch(LOCAL_TTS + '/health', { cache: 'no-store' })
       .then((r) => r.json())
@@ -1099,8 +907,8 @@
   }
 
   // 从某个字符偏移处对应的句子开始读
-  function playTextFrom(text, offset, label, keepQueue) {
-    stop(keepQueue);
+  function playTextFrom(text, offset, label) {
+    stop();
     state.sentences = splitSentences(text);
     if (!state.sentences.length) {
       render('没有可朗读的文字');
@@ -1298,7 +1106,6 @@
         <div class="dshr-cur"></div>
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
         <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-local-cb"> 本地语音服务（云健 · 无句间停顿）</label></div>
-        <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-autoread-cb"> 自动朗读新回复</label></div>
         <div class="dshr-row"><button class="dshr-start-server" style="display:none">启动本地服务</button></div>
         <div class="dshr-row"><a class="dshr-local-help" target="_blank" rel="noopener"
           href="https://github.com/2700-hub/dsh-web-reader#本地语音服务可选">本地语音服务怎么用？</a></div>
@@ -1504,21 +1311,6 @@
           }
           render();
         });
-      });
-    }
-
-    const autoCb = root.querySelector('.dshr-autoread-cb');
-    if (autoCb) {
-      autoCb.checked = !!state.autoRead;
-      autoCb.addEventListener('change', () => {
-        state.autoRead = autoCb.checked;
-        localStorage.setItem(LS_AUTOREAD, state.autoRead ? '1' : '0');
-        if (state.autoRead) {
-          startAutoRead();
-          toast('已开启：新回复生成完会自动朗读');
-        } else {
-          toast('已关闭自动朗读');
-        }
       });
     }
 
@@ -2141,7 +1933,6 @@
       setTimeout(probeHide, 1800);
       setTimeout(warmUpEngine, 1200);
       if (state.local) localPing();
-      if (state.autoRead) startAutoRead();
     } catch (err) {
       console.error('[dsh-reader] 初始化失败：', err);
       probeNote('初始化失败：' + (err && err.message ? err.message : err), true);
