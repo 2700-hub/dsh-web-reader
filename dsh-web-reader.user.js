@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.14
+// @version      1.15.15
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.14';
+  const LOCAL_VERSION = '1.15.15';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -104,6 +104,7 @@
     local: localStorage.getItem(LS_LOCAL) === '1',
     autoRead: localStorage.getItem(LS_AUTOREAD) === '1',
     autoQueue: [],
+    lastAutoText: '',
     localReady: false,
     localAudio: null,
     localToken: 0,
@@ -630,14 +631,19 @@
     if (!state.autoRead || state.playing) return;
     const item = state.autoQueue.shift();
     if (!item) return;
+    if (!item.turn || !item.turn.isConnected) { state.autoQueue = []; return; }
+    if (item.text === state.lastAutoText) { drainAutoQueue(); return; }
+    if (Date.now() - (item.at || 0) > 3 * 60 * 1000) { drainAutoQueue(); return; }
     state.scopeEl = item.scope;
     state.hlCache = null;
+    state.lastAutoText = item.text;
     playTextFrom(item.text, 0, '新回复');
   }
 
   window.__dshDrainAuto = drainAutoQueue; // 调试用
 
   function finish() {
+    localStop();
     state.playing = false;
     state.paused = false;
     state.current = null;
@@ -904,15 +910,18 @@
       return;
     }
     if (state.playing && state.scopeEl && turn.contains(state.scopeEl)) return;
+    if (text === state.lastAutoText) return;
     // 正在朗读：先排队，读完当前这轮再接着读，不打断
     if (state.playing) {
-      if (!state.autoQueue.some((q) => q.turn === turn)) {
-        state.autoQueue.push({ turn, scope, text });
+      const dup = state.autoQueue.some((q) => q.turn === turn || q.text === text);
+      if (!dup) {
+        state.autoQueue.push({ turn, scope, text, at: Date.now() });
         if (state.autoQueue.length > 5) state.autoQueue.shift();
       }
       window.__dshAutoLast = { reason: 'queued', chars: text.length, at: Date.now() };
       return;
     }
+    state.lastAutoText = text;
     // 记录本次朗读抓到的原文与前几个块，方便定位"为什么读了思考"
     try {
       window.__dshAutoLast = {
