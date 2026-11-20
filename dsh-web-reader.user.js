@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.14.2
+// @version      1.14.3
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.14.2';
+  const LOCAL_VERSION = '1.14.3';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -1563,7 +1563,13 @@
     const el = root.querySelector('.dshr-loading');
     if (!el) return;
     clearInterval(loadingTimer);
-    if (!on) { el.style.display = 'none'; return; }
+    if (!on) {
+      const elapsed = Date.now() - (state.loadingT0 || 0);
+      const wait = Math.max(0, 400 - elapsed);
+      if (wait > 0) { setTimeout(() => { el.style.display = 'none'; }, wait); return; }
+      el.style.display = 'none';
+      return;
+    }
     el.style.display = 'inline-flex';
     const ring = el.querySelector('.dshr-ring');
     const label = el.querySelector('.dshr-loading-text');
@@ -1581,13 +1587,16 @@
       if (ring) ring.style.strokeDashoffset = String(50.27 * (1 - frac));
       if (!label) return;
       const left = (total - elapsed) / 1000;
-      if (left > 0.15) label.textContent = '正在合成 · 约 ' + left.toFixed(1) + ' 秒';
+      window.__dshLoad = { totalMs: Math.round(total), elapsedMs: elapsed };
+      if (left > 0.15) label.textContent = '预计还需 ' + left.toFixed(1) + ' 秒';
       else if (elapsed < total * 1.02) label.textContent = '正在合成 · 即将开始';
       else label.textContent = '正在合成 · 比预估慢，继续等待…';
     };
     paint();
     loadingTimer = setInterval(paint, 100);
   }
+
+  window.__dshLatency = () => ({ sampleMs: latencyMs, sampleLen: latencyLen });
 
   // 实际出声后回填耗时，下次估算更准
   function noteLatency() {

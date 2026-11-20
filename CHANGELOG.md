@@ -31,6 +31,33 @@ git push --follow-tags origin main
 
 ---
 
+## [1.14.3] - 2026-11-20
+
+### 变更
+
+- 等待提示文案改为「预计还需 X 秒」，更接近"还剩多久"
+- 加载提示至少显示 400ms，避免一闪而过
+- 新增调试接口 `window.__dshLatency()` 与 `window.__dshLoad`
+
+### 技术说明
+
+1.14.1 的自适应估算是"按上次实测耗时缩放"，但显示持续时间可能只有一两百毫秒，
+来不及看清。现在：
+
+- 文案改成「预计还需 X.X 秒」
+- 隐藏前保证至少显示 400ms
+- `window.__dshLatency()` 返回学习到的样本（毫秒与字数）
+- `window.__dshLoad` 在等待期间给出 `{ totalMs, elapsedMs }`，便于判断估算是否离谱
+
+用法：点朗读后立刻在 Console 执行
+
+```js
+window.__dshLatency()   // { sampleMs: 2312, sampleLen: 100 }
+window.__dshLoad        // { totalMs: 2400, elapsedMs: 300 }
+```
+
+---
+
 ## [1.14.2] - 2026-11-20
 
 ### 变更
