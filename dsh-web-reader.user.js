@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.14.3
+// @version      1.15.0
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.14.3';
+  const LOCAL_VERSION = '1.15.0';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -63,6 +63,7 @@
   const LS_VOICE = 'dsh-reader.voice';
   const LS_VOL = 'dsh-reader.volume';
   const LS_LOCAL = 'dsh-reader.local';
+  const LS_AUTOREAD = 'dsh-reader.autoread';
   // 本地语音服务（tools/tts-server 启动后监听这个地址）
   const LOCAL_TTS = 'http://127.0.0.1:5050';
   const CHUNK_CHARS = 300;
@@ -75,6 +76,7 @@
     queued: 0,
     progress: 0,
     local: localStorage.getItem(LS_LOCAL) === '1',
+    autoRead: localStorage.getItem(LS_AUTOREAD) === '1',
     localReady: false,
     localAudio: null,
     localToken: 0,
@@ -775,6 +777,59 @@
     localAudioFor(c, token);
   }
 
+  /* ---------------- 自动朗读新回复 ---------------- */
+
+  const autoSeen = new WeakSet();
+  let autoObserver = null;
+
+  function autoTextOf(turn) {
+    const scope = scopeOfTurn(turn) || turn;
+    const blocks = collectBlocks(scope);
+    const text = blocks.length ? textFromBlocks(blocks) : (scope.innerText || '').trim();
+    return { scope, text };
+  }
+
+  function maybeAutoRead(turn) {
+    if (!state.autoRead) return;
+    const { scope, text } = autoTextOf(turn);
+    if (!text || text.length < 2) return;
+    if (state.playing && state.scopeEl && turn.contains(state.scopeEl)) return;
+    state.scopeEl = scope;
+    state.hlCache = null;
+    playTextFrom(text, 0, '新回复');
+  }
+
+  function watchTurn(turn) {
+    if (!turn || autoSeen.has(turn)) return;
+    autoSeen.add(turn);
+    const scope = scopeOfTurn(turn) || turn;
+    let lastLen = (scope.innerText || '').length;
+    let timer = 0;
+    const obs = new MutationObserver(() => {
+      const len = (scope.innerText || '').length;
+      if (len === lastLen) return;
+      lastLen = len;
+      clearTimeout(timer);
+      timer = setTimeout(() => maybeAutoRead(turn), 1500); // 生成停顿 1.5 秒再读
+    });
+    obs.observe(scope, { childList: true, subtree: true, characterData: true });
+  }
+
+  function startAutoRead() {
+    if (autoObserver) return;
+    document.querySelectorAll(TURN_SEL).forEach((t) => autoSeen.add(t));
+    autoObserver = new MutationObserver((muts) => {
+      muts.forEach((m) => {
+        m.addedNodes.forEach((n) => {
+          if (!n || n.nodeType !== 1) return;
+          if (n.matches && n.matches(TURN_SEL)) watchTurn(n);
+          if (n.querySelectorAll) n.querySelectorAll(TURN_SEL).forEach(watchTurn);
+        });
+      });
+    });
+    autoObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
   function localPing() {
     return fetch(LOCAL_TTS + '/health', { cache: 'no-store' })
       .then((r) => r.json())
@@ -1084,6 +1139,7 @@
         <div class="dshr-cur"></div>
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
         <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-local-cb"> 本地语音服务（云健 · 无句间停顿）</label></div>
+        <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-autoread-cb"> 自动朗读新回复</label></div>
         <div class="dshr-row"><button class="dshr-start-server" style="display:none">启动本地服务</button></div>
         <div class="dshr-row"><a class="dshr-local-help" target="_blank" rel="noopener"
           href="https://github.com/2700-hub/dsh-web-reader#本地语音服务可选">本地语音服务怎么用？</a></div>
@@ -1289,6 +1345,21 @@
           }
           render();
         });
+      });
+    }
+
+    const autoCb = root.querySelector('.dshr-autoread-cb');
+    if (autoCb) {
+      autoCb.checked = !!state.autoRead;
+      autoCb.addEventListener('change', () => {
+        state.autoRead = autoCb.checked;
+        localStorage.setItem(LS_AUTOREAD, state.autoRead ? '1' : '0');
+        if (state.autoRead) {
+          startAutoRead();
+          toast('已开启：新回复生成完会自动朗读');
+        } else {
+          toast('已关闭自动朗读');
+        }
       });
     }
 
@@ -1892,6 +1963,7 @@
       setTimeout(probeHide, 1800);
       setTimeout(warmUpEngine, 1200);
       if (state.local) localPing();
+      if (state.autoRead) startAutoRead();
     } catch (err) {
       console.error('[dsh-reader] 初始化失败：', err);
       probeNote('初始化失败：' + (err && err.message ? err.message : err), true);
