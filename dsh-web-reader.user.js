@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.12.8
+// @version      1.13.0
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.12.8';
+  const LOCAL_VERSION = '1.13.0';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -62,6 +62,9 @@
   const LS_RATE = 'dsh-reader.rate';
   const LS_VOICE = 'dsh-reader.voice';
   const LS_VOL = 'dsh-reader.volume';
+  const LS_LOCAL = 'dsh-reader.local';
+  // 本地语音服务（tools/tts-server 启动后监听这个地址）
+  const LOCAL_TTS = 'http://127.0.0.1:5050';
   const CHUNK_CHARS = 300;
   const BLOCK_TAGS = /^(P|LI|H1|H2|H3|H4|H5|H6|BLOCKQUOTE|TD|TH|PRE|DIV|SECTION|ARTICLE)$/;
 
@@ -71,6 +74,11 @@
     index: 0,
     queued: 0,
     progress: 0,
+    local: localStorage.getItem(LS_LOCAL) === '1',
+    localReady: false,
+    localAudio: null,
+    localToken: 0,
+    localTimer: 0,
     rate: Number(localStorage.getItem(LS_RATE) || 1) || 1,
     voiceName: localStorage.getItem(LS_VOICE) || '',
     volume: Number(localStorage.getItem(LS_VOL) ?? 1),
@@ -602,6 +610,7 @@
     // 没在播就别 cancel：cancel() 会把语音引擎打回未初始化状态，
     // 下一次开口要多等几百毫秒——这正是"点了朗读要等一下"的主要来源。
     const wasActive = state.playing || synth.speaking || synth.pending;
+    localStop();
     state.gen += 1;
     state.playing = false;
     state.paused = false;
@@ -628,6 +637,88 @@
     state.hlSearchPos = 0;
     clearPlayHighlight();
     render('朗读完成');
+  }
+
+  /* ---------------- 本地语音（tools/tts-server） ---------------- */
+
+  function localUrl(i) {
+    return LOCAL_TTS + '/tts?text=' + encodeURIComponent(state.sentences[i] || '');
+  }
+
+  function localStop() {
+    state.localToken += 1;
+    clearTimeout(state.localTimer);
+    const a = state.localAudio;
+    state.localAudio = null;
+    if (a) {
+      try { a.pause(); a.src = ''; } catch (err) { /* 忽略 */ }
+    }
+  }
+
+  // 一句一个音频：当前句播完，下一句已经预热好了
+  function localPlay(i) {
+    const token = ++state.localToken;
+    localStop();
+    state.localToken = token;
+    const text = state.sentences[i];
+    if (!text) { finish(); return; }
+
+    const audio = new Audio(localUrl(i));
+    audio.preload = 'auto';
+    state.localAudio = audio;
+    state.playing = true;
+    state.paused = false;
+    state.index = i;
+    state.progress = i;
+    state.current = text;
+    render();
+
+    audio.ontimeupdate = () => {
+      if (token !== state.localToken) return;
+      const dur = audio.duration;
+      if (!dur || !isFinite(dur)) return;
+      const frac = Math.min(1, audio.currentTime / dur);
+      state.progress = i + frac;
+      if (state.scopeEl) {
+        highlightChar(state.scopeEl, text, Math.min(text.length - 1, Math.floor(frac * text.length)));
+      }
+      render();
+    };
+    audio.onended = () => {
+      if (token !== state.localToken) return;
+      if (i + 1 < state.sentences.length) localPlay(i + 1);
+      else finish();
+    };
+    audio.onerror = () => {
+      if (token !== state.localToken) return;
+      toast('本地语音不可用：请确认 tts-server 已启动');
+      state.playing = false;
+      render('本地语音不可用');
+    };
+    audio.play().catch((err) => {
+      if (token !== state.localToken) return;
+      state.playing = false;
+      toast('播放被拦截：' + (err && err.message ? err.message : err));
+      render();
+    });
+
+    // 预热下一句
+    if (i + 1 < state.sentences.length) {
+      const next = new Audio(localUrl(i + 1));
+      next.preload = 'auto';
+      next.load();
+    }
+  }
+
+  function localPing() {
+    return fetch(LOCAL_TTS + '/health', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => {
+        state.localReady = !!(j && j.ok);
+        if (state.localReady && state.local) render('本地语音已就绪 · ' + (j.voice || ''));
+        return state.localReady;
+      })
+      .catch(() => { state.localReady = false; return false; });
   }
 
   function queueOne(i, gen) {
@@ -744,6 +835,17 @@
       idx = i;
     }
     toast('从第 ' + (idx + 1) + ' / ' + state.sentences.length + ' 句开始');
+    if (state.local) {
+      if (!state.localReady) {
+        toast('本地语音服务未启动');
+        state.local = false;
+        localStorage.setItem(LS_LOCAL, '0');
+        startFrom(idx);
+        return;
+      }
+      localPlay(idx);
+      return;
+    }
     startFrom(idx);
   }
 
@@ -763,6 +865,18 @@
   }
 
   function togglePause() {
+    // 本地语音模式：直接控制 Audio 元素
+    if (state.local && state.localAudio) {
+      if (state.paused) {
+        state.paused = false;
+        state.localAudio.play().catch(() => {});
+      } else {
+        state.paused = true;
+        state.localAudio.pause();
+      }
+      render();
+      return;
+    }
     if (!state.playing) {
       // 播放状态被意外中断（比如暂停期间收到 onend）时，按钮也能把声音拉回来
       if (state.chunks.length && state.index < state.chunks.length) {
@@ -852,6 +966,8 @@
         color: #a9c0ff; border: 1px solid rgba(107,138,253,.6); border-radius: 8px;
         padding: 4px 6px; background: rgba(107,138,253,.12); }
       #dsh-reader .dshr-update-link:hover { background: rgba(107,138,253,.22); }
+      #dsh-reader .dshr-local { display: flex; align-items: center; gap: 6px; color: #c9d1e0; font-size: 11px; }
+      #dsh-reader .dshr-local input { accent-color: #6b8afd; }
       #dsh-reader .dshr-kbd { opacity: .55; font-size: 11px; margin-top: 6px; }
       #dsh-reader .dshr-pop { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px);
         background: rgba(24,26,31,.98); border: 1px solid rgba(255,255,255,.16);
@@ -887,6 +1003,7 @@
         <div class="dshr-status">就绪 · Alt+点击任意消息朗读</div>
         <div class="dshr-cur"></div>
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
+        <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-local-cb"> 本地语音服务（云健 · 无句间停顿）</label></div>
         <div class="dshr-row"><a class="dshr-update-link" target="_blank" rel="noopener" style="display:none">安装新版</a></div>
         <div class="dshr-row"><select class="dshr-voice"></select></div>
         <div class="dshr-kbd">Alt+点击正文从该句读 · Alt+X 停止 · Alt+P 面板</div>
@@ -1040,6 +1157,29 @@
         toast('检查更新失败：' + (err && err.message ? err.message : err));
       }
     });
+
+    // 本地语音开关
+    const localCb = root.querySelector('.dshr-local-cb');
+    if (localCb) {
+      localCb.checked = !!state.local;
+      localCb.addEventListener('change', () => {
+        state.local = localCb.checked;
+        localStorage.setItem(LS_LOCAL, state.local ? '1' : '0');
+        stop();
+        if (!state.local) { toast('已切回系统语音'); render(); return; }
+        localPing().then((ok) => {
+          if (ok) {
+            toast('已切换到本地语音（云健）');
+          } else {
+            state.local = false;
+            localStorage.setItem(LS_LOCAL, '0');
+            localCb.checked = false;
+            toast('本地语音服务未启动：运行 tools/tts-server/start.cmd');
+          }
+          render();
+        });
+      });
+    }
 
     btnPause.addEventListener('click', togglePause);
 
@@ -1562,6 +1702,7 @@
       render('就绪 · Alt+点击任意消息朗读');
       setTimeout(probeHide, 1800);
       setTimeout(warmUpEngine, 1200);
+      if (state.local) localPing();
     } catch (err) {
       console.error('[dsh-reader] 初始化失败：', err);
       probeNote('初始化失败：' + (err && err.message ? err.message : err), true);
