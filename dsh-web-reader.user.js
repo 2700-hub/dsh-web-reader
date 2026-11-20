@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.12.4
+// @version      1.12.5
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.12.4';
+  const LOCAL_VERSION = '1.12.5';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -95,35 +95,41 @@
 
   /* ---------------- 文本处理 ---------------- */
 
+  // 一行视作一句。只有超长行（>500 字）才退回按标点切分，避免一次念太久
+  const MAX_UNIT = 500;
+
+  function splitLongLine(line) {
+    const parts = line.split(/(?<=[。！？!?；;…])/).map((s) => s.trim()).filter(Boolean);
+    const out = [];
+    for (const part of parts) {
+      if (part.length <= MAX_UNIT) { out.push(part); continue; }
+      let rest = part;
+      while (rest.length > MAX_UNIT) {
+        let cut = rest.lastIndexOf('，', MAX_UNIT - 20);
+        if (cut < 100) cut = rest.lastIndexOf('、', MAX_UNIT - 20);
+        if (cut < 100) cut = MAX_UNIT - 40;
+        out.push(rest.slice(0, cut + 1).trim());
+        rest = rest.slice(cut + 1).trim();
+      }
+      if (rest) out.push(rest);
+    }
+    return out;
+  }
+
   function splitSentences(raw) {
-    let text = String(raw || '')
+    const text = String(raw || '')
       .replace(/\r/g, '')
       .replace(/[ \t\u00a0]+/g, ' ')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
     if (!text) return [];
 
-    const rough = text.split(/(?<=[。！？!?；;…])|(?<=\n)/);
     const out = [];
-    for (let piece of rough) {
-      piece = piece.trim();
-      if (!piece) continue;
-      while (piece.length > 220) {
-        let cut = piece.lastIndexOf('，', 200);
-        if (cut < 80) cut = piece.lastIndexOf('、', 200);
-        if (cut < 80) cut = 200;
-        out.push(piece.slice(0, cut + 1).trim());
-        piece = piece.slice(cut + 1).trim();
-      }
-      if (!piece) continue;
-      const last = out[out.length - 1];
-      const endsSentence = /[。！？!?；;…]$/.test(piece);
-      // 只把"没有句末标点的超短碎片"并进上一句；完整短句保留独立，方便按行定位
-      if (last && !endsSentence && piece.length < 6 && last.length < 260) {
-        out[out.length - 1] = last + piece;
-      } else {
-        out.push(piece);
-      }
+    for (const rawLine of text.split('\n')) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (line.length <= MAX_UNIT) out.push(line);
+      else out.push(...splitLongLine(line));
     }
     return out;
   }
@@ -662,7 +668,7 @@
       if (acc > offset) { idx = i; break; }
       idx = i;
     }
-    toast('从第 ' + (idx + 1) + ' / ' + state.sentences.length + ' 句开始');
+    toast('从第 ' + (idx + 1) + ' / ' + state.sentences.length + ' 行开始');
     startFrom(idx);
   }
 
@@ -800,15 +806,15 @@
         <button class="dshr-min" title="收起/展开">–</button>
         <button class="dshr-close" title="关闭面板（Alt+P 找回）">×</button>
       </div>
-      <div class="dshr-bar" title="拖动或点击，从对应句子开始读"><i></i></div>
+      <div class="dshr-bar" title="拖动或点击，从对应行开始读"><i></i></div>
       <div class="dshr-collapsible">
-        <div class="dshr-hint">拖动/点击进度条跳句 · Alt+点正文从该句开始</div>
+        <div class="dshr-hint">拖动/点击进度条跳行 · Alt+点正文从该行开始</div>
         <div class="dshr-status">就绪 · Alt+点击任意消息朗读</div>
         <div class="dshr-cur"></div>
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
         <div class="dshr-row"><a class="dshr-update-link" target="_blank" rel="noopener" style="display:none">安装新版</a></div>
         <div class="dshr-row"><select class="dshr-voice"></select></div>
-        <div class="dshr-kbd">Alt+点击正文从该句读 · Alt+X 停止 · Alt+P 面板</div>
+        <div class="dshr-kbd">Alt+点击正文从该行读 · Alt+X 停止 · Alt+P 面板</div>
       </div>
       <div class="dshr-pop" data-pop="rate">
         <span class="dshr-pop-label">语速</span>
@@ -966,7 +972,7 @@
       if (!state.sentences.length) return;
       const i = sentenceAt(clientX);
       const s = state.sentences[i] || '';
-      hintEl.textContent = '第 ' + (i + 1) + ' / ' + state.sentences.length + ' 句：' + s.slice(0, 22) + (s.length > 22 ? '…' : '');
+      hintEl.textContent = '第 ' + (i + 1) + ' / ' + state.sentences.length + ' 行：' + s.slice(0, 22) + (s.length > 22 ? '…' : '');
       hintEl.style.opacity = '0.8';
       return i;
     }
@@ -975,7 +981,7 @@
       if (!state.sentences.length) { toast('先读一条消息'); return; }
       const i = sentenceAt(clientX);
       startFrom(i);
-      toast('从第 ' + (i + 1) + ' / ' + state.sentences.length + ' 句开始');
+      toast('从第 ' + (i + 1) + ' / ' + state.sentences.length + ' 行开始');
     }
 
     barBox.addEventListener('pointerdown', (e) => {
@@ -1007,7 +1013,7 @@
 
     barBox.addEventListener('pointerleave', () => {
       if (dragging) return;
-      hintEl.textContent = '拖动/点击进度条跳句 · Alt+点正文从该句开始';
+      hintEl.textContent = '拖动/点击进度条跳行 · Alt+点正文从该行开始';
       hintEl.style.opacity = '0.5';
     });
 
@@ -1174,7 +1180,7 @@
 
     if (msg) statusEl.textContent = msg;
     else if (state.playing) {
-      statusEl.textContent = (state.paused ? '已暂停' : '朗读中') + ' · 第 ' + shown + ' / ' + total + ' 句';
+      statusEl.textContent = (state.paused ? '已暂停' : '朗读中') + ' · 第 ' + shown + ' / ' + total + ' 行';
     } else if (total && done >= total) {
       statusEl.textContent = '朗读完成';
     }
