@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.13.7
+// @version      1.13.8
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.13.7';
+  const LOCAL_VERSION = '1.13.8';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -770,7 +770,7 @@
     state.current = chunk.text;
     state.hlSearchPos = 0;
     render();
-    setLoading(true);
+    setLoading(true, 600 + (chunk.text.length * 12));
     localAudioFor(c, token);
   }
 
@@ -1021,12 +1021,10 @@
         transition: width .2s ease; pointer-events: none; }
       #dsh-reader .dshr-hint { opacity: .5; font-size: 11px; margin-top: 4px; min-height: 14px; }
       #dsh-reader .dshr-status { opacity: .8; margin-top: 6px; min-height: 18px; word-break: break-all; }
-      #dsh-reader .dshr-loading { display: none; gap: 3px; align-items: center; margin-left: 6px; vertical-align: middle; }
-      #dsh-reader .dshr-loading i { width: 4px; height: 4px; border-radius: 50%; background: #6b8afd; display: block;
-        animation: dshr-blink 1s infinite ease-in-out; }
-      #dsh-reader .dshr-loading i:nth-child(2) { animation-delay: .15s; }
-      #dsh-reader .dshr-loading i:nth-child(3) { animation-delay: .3s; }
-      @keyframes dshr-blink { 0%, 80%, 100% { opacity: .2; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+      #dsh-reader .dshr-loading { display: none; gap: 6px; align-items: center; margin-top: 4px; color: #a9c0ff; font-size: 11px; }
+      #dsh-reader .dshr-ring-track { fill: none; stroke: rgba(255,255,255,.16); stroke-width: 2.5; }
+      #dsh-reader .dshr-ring { fill: none; stroke: #6b8afd; stroke-width: 2.5; stroke-linecap: round;
+        stroke-dasharray: 50.27; stroke-dashoffset: 50.27; transform: rotate(-90deg); transform-origin: 10px 10px; transition: stroke-dashoffset .1s linear; }
       #dsh-reader .dshr-cur { opacity: .55; margin-top: 2px; max-height: 36px; overflow: hidden; word-break: break-all; }
       #dsh-reader select, #dsh-reader input[type=range] { width: 100%; }
       #dsh-reader select { background: rgba(255,255,255,.07); color: #e8eaed; border: 1px solid rgba(255,255,255,.16);
@@ -1073,7 +1071,10 @@
       <div class="dshr-collapsible">
         <div class="dshr-hint">拖动/点击进度条跳句 · Alt+点正文从该句开始</div>
         <div class="dshr-status">就绪 · Alt+点击任意消息朗读</div>
-        <div class="dshr-loading"><i></i><i></i><i></i><span style="margin-left:2px">正在合成…</span></div>
+        <div class="dshr-loading">
+          <svg viewBox="0 0 20 20" width="14" height="14"><circle class="dshr-ring-track" cx="10" cy="10" r="8"></circle><circle class="dshr-ring" cx="10" cy="10" r="8"></circle></svg>
+          <span class="dshr-loading-text">正在合成…</span>
+        </div>
         <div class="dshr-cur"></div>
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
         <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-local-cb"> 本地语音服务（云健 · 无句间停顿）</label></div>
@@ -1515,10 +1516,27 @@
     if (btnPause) btnPause.textContent = state.paused ? '▶' : '⏸';
   }
 
-  function setLoading(on) {
+  let loadingTimer = 0;
+  function setLoading(on, estMs) {
     if (!root) return;
     const el = root.querySelector('.dshr-loading');
-    if (el) el.style.display = on ? 'inline-flex' : 'none';
+    if (!el) return;
+    clearInterval(loadingTimer);
+    if (!on) { el.style.display = 'none'; return; }
+    el.style.display = 'inline-flex';
+    const ring = el.querySelector('.dshr-ring');
+    const label = el.querySelector('.dshr-loading-text');
+    const total = Math.max(600, Math.min(6000, estMs || 1200));
+    const t0 = Date.now();
+    const paint = () => {
+      const elapsed = Date.now() - t0;
+      const frac = Math.min(0.95, elapsed / total);
+      if (ring) ring.style.strokeDashoffset = String(50.27 * (1 - frac));
+      const left = Math.max(0, (total - elapsed) / 1000);
+      if (label) label.textContent = left > 0.2 ? '正在合成 · 约 ' + left.toFixed(1) + ' 秒' : '正在合成 · 即将开始';
+    };
+    paint();
+    loadingTimer = setInterval(paint, 100);
   }
 
   let toastEl = null;
