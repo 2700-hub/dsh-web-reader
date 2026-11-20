@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.13.2
+// @version      1.13.3
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.13.2';
+  const LOCAL_VERSION = '1.13.3';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -79,6 +79,7 @@
     localAudio: null,
     localToken: 0,
     localTimer: 0,
+    localUrls: new Map(),
     rate: Number(localStorage.getItem(LS_RATE) || 1) || 1,
     voiceName: localStorage.getItem(LS_VOICE) || '',
     volume: Number(localStorage.getItem(LS_VOL) ?? 1),
@@ -604,10 +605,6 @@
 
   /* ---------------- 本地语音（tools/tts-server） ---------------- */
 
-  function localUrl(i) {
-    return LOCAL_TTS + '/tts?text=' + encodeURIComponent(state.sentences[i] || '');
-  }
-
   function localStop() {
     state.localToken += 1;
     clearTimeout(state.localTimer);
@@ -616,63 +613,102 @@
     if (a) {
       try { a.pause(); a.src = ''; } catch (err) { /* 忽略 */ }
     }
+    state.localUrls.forEach((u) => {
+      if (typeof u === 'string') { try { URL.revokeObjectURL(u); } catch (err) { /* 忽略 */ } }
+    });
+    state.localUrls.clear();
   }
 
-  // 一句一个音频：当前句播完，下一句已经预热好了
-  function localPlay(i) {
+  // 预取：把接下来几段的音频先取下来（blob），播的时候就不用等网络
+  function localPrefetch(from) {
+    for (let k = from; k < Math.min(from + 3, state.chunks.length); k += 1) {
+      if (state.localUrls.has(k)) continue;
+      const chunk = state.chunks[k];
+      if (!chunk) continue;
+      const p = fetch(LOCAL_TTS + '/tts?text=' + encodeURIComponent(chunk.text))
+        .then((r) => {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.blob();
+        })
+        .then((b) => {
+          const u = URL.createObjectURL(b);
+          state.localUrls.set(k, u);
+          return u;
+        })
+        .catch((err) => {
+          state.localUrls.delete(k);
+          throw err;
+        });
+      state.localUrls.set(k, p); // 先占位，避免同一段重复请求
+    }
+  }
+
+  function localAudioFor(c, token) {
+    const chunk = state.chunks[c];
+    if (!chunk) { finish(); return; }
+    const cached = state.localUrls.get(c);
+    const wait = cached ? Promise.resolve(cached) : (localPrefetch(c), Promise.resolve(state.localUrls.get(c)));
+    wait
+      .then((src) => {
+        if (token !== state.localToken) return;
+        const audio = new Audio(src);
+        audio.volume = Math.max(0, Math.min(1, Number.isFinite(state.volume) ? state.volume : 1));
+        audio.playbackRate = state.rate || 1;
+        state.localAudio = audio;
+        audio.ontimeupdate = () => {
+          if (token !== state.localToken) return;
+          const dur = audio.duration;
+          if (!dur || !isFinite(dur)) return;
+          const frac = Math.min(1, audio.currentTime / dur);
+          const span = (chunk.to != null ? chunk.to : chunk.from + 1) - chunk.from;
+          state.progress = chunk.from + frac * span;
+          if (state.scopeEl) {
+            highlightChar(state.scopeEl, chunk.text, Math.min(chunk.text.length - 1, Math.floor(frac * chunk.text.length)));
+          }
+          render();
+        };
+        audio.onended = () => {
+          if (token !== state.localToken) return;
+          if (c + 1 < state.chunks.length) localPlay(c + 1);
+          else finish();
+        };
+        audio.onerror = () => {
+          if (token !== state.localToken) return;
+          toast('本地语音播放失败');
+          state.playing = false;
+          render();
+        };
+        audio.play().catch((err) => {
+          if (token !== state.localToken) return;
+          state.playing = false;
+          toast('播放被拦截：' + (err && err.message ? err.message : err));
+          render();
+        });
+        localPrefetch(c + 1);
+      })
+      .catch(() => {
+        if (token !== state.localToken) return;
+        toast('本地语音合成失败：检查 tts-server 窗口');
+        state.playing = false;
+        render('本地语音不可用');
+      });
+  }
+
+  // 一段一个音频：当前段播的时候，后两段已经在本地备好
+  function localPlay(c) {
     const token = ++state.localToken;
     localStop();
     state.localToken = token;
-    const text = state.sentences[i];
-    if (!text) { finish(); return; }
-
-    const audio = new Audio(localUrl(i));
-    audio.preload = 'auto';
-    audio.volume = Math.max(0, Math.min(1, Number.isFinite(state.volume) ? state.volume : 1));
-    audio.playbackRate = state.rate || 1;
-    state.localAudio = audio;
+    const chunk = state.chunks[c];
+    if (!chunk) { finish(); return; }
     state.playing = true;
     state.paused = false;
-    state.index = i;
-    state.progress = i;
-    state.current = text;
+    state.index = c;
+    state.progress = chunk.from;
+    state.current = chunk.text;
+    state.hlSearchPos = 0;
     render();
-
-    audio.ontimeupdate = () => {
-      if (token !== state.localToken) return;
-      const dur = audio.duration;
-      if (!dur || !isFinite(dur)) return;
-      const frac = Math.min(1, audio.currentTime / dur);
-      state.progress = i + frac;
-      if (state.scopeEl) {
-        highlightChar(state.scopeEl, text, Math.min(text.length - 1, Math.floor(frac * text.length)));
-      }
-      render();
-    };
-    audio.onended = () => {
-      if (token !== state.localToken) return;
-      if (i + 1 < state.sentences.length) localPlay(i + 1);
-      else finish();
-    };
-    audio.onerror = () => {
-      if (token !== state.localToken) return;
-      toast('本地语音不可用：请确认 tts-server 已启动');
-      state.playing = false;
-      render('本地语音不可用');
-    };
-    audio.play().catch((err) => {
-      if (token !== state.localToken) return;
-      state.playing = false;
-      toast('播放被拦截：' + (err && err.message ? err.message : err));
-      render();
-    });
-
-    // 预热下一句
-    if (i + 1 < state.sentences.length) {
-      const next = new Audio(localUrl(i + 1));
-      next.preload = 'auto';
-      next.load();
-    }
+    localAudioFor(c, token);
   }
 
   function localPing() {
@@ -808,7 +844,9 @@
         startFrom(idx);
         return;
       }
-      localPlay(idx);
+      state.chunks = buildChunksFrom(idx);
+      state.queued = 0;
+      localPlay(0);
       return;
     }
     startFrom(idx);
@@ -1174,6 +1212,15 @@
     function seekTo(clientX) {
       if (!state.sentences.length) { toast('先读一条消息'); return; }
       const i = sentenceAt(clientX);
+      if (state.local) {
+        if (!state.localReady) { toast('本地语音服务未启动'); return; }
+        stop();
+        state.chunks = buildChunksFrom(i);
+        state.queued = 0;
+        localPlay(0);
+        toast('从第 ' + (i + 1) + ' / ' + state.sentences.length + ' 句开始');
+        return;
+      }
       startFrom(i);
       toast('从第 ' + (i + 1) + ' / ' + state.sentences.length + ' 句开始');
     }
