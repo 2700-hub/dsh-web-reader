@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.13.9
+// @version      1.14.0
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.13.9';
+  const LOCAL_VERSION = '1.14.0';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -1042,6 +1042,7 @@
         border: 1px solid rgba(107,138,253,.6); border-radius: 8px; padding: 4px 6px;
         background: rgba(107,138,253,.12); }
       #dsh-reader .dshr-start-server:hover { background: rgba(107,138,253,.24); }
+      #dsh-reader .dshr-local-help { color: #8fa6d8; font-size: 11px; text-decoration: underline; opacity: .85; }
       #dsh-reader .dshr-kbd { opacity: .55; font-size: 11px; margin-top: 6px; }
       #dsh-reader .dshr-pop { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px);
         background: rgba(24,26,31,.98); border: 1px solid rgba(255,255,255,.16);
@@ -1083,6 +1084,8 @@
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
         <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-local-cb"> 本地语音服务（云健 · 无句间停顿）</label></div>
         <div class="dshr-row"><button class="dshr-start-server" style="display:none">启动本地服务</button></div>
+        <div class="dshr-row"><a class="dshr-local-help" target="_blank" rel="noopener"
+          href="https://github.com/2700-hub/dsh-web-reader#本地语音服务可选">本地语音服务怎么用？</a></div>
         <div class="dshr-row"><a class="dshr-update-link" target="_blank" rel="noopener" style="display:none">安装新版</a></div>
         <div class="dshr-row"><select class="dshr-voice"></select></div>
         <div class="dshr-kbd">Alt+点击正文从该句读 · Alt+X 停止 · Alt+P 面板</div>
@@ -1281,7 +1284,7 @@
             localStorage.setItem(LS_LOCAL, '0');
             localCb.checked = false;
             showStartServer(true);
-            toast('本地语音服务未启动：点「启动本地服务」，或先运行 install-protocol.cmd');
+            toast('本地语音服务未启动：先点「本地语音服务怎么用？」');
           }
           render();
         });

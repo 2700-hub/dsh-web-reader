@@ -24,12 +24,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Package local TTS server
+        run: |
+          cd tools
+          zip -r ../dsh-tts-server.zip tts-server \
+            -x 'tts-server/node_modules/*' 'tts-server/*.log'
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           generate_release_notes: true
-          files: dsh-web-reader.user.js
+          files: |
+            dsh-web-reader.user.js
+            dsh-tts-server.zip
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

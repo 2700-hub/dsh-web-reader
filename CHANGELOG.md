@@ -31,6 +31,30 @@ git push --follow-tags origin main
 
 ---
 
+## [1.14.0] - 2026-11-20
+
+### 变更
+
+- Release 现在附带 `dsh-tts-server.zip`，别人下载解压即可使用本地语音
+- 面板新增「本地语音服务怎么用？」链接
+- 服务没开时的提示改为指向这个链接
+
+### 技术说明
+
+之前只有本仓库开发者能用本地服务——因为 `tools/tts-server` 不在 userscript 里，
+普通用户从 raw 装完脚本后，本地根本没有那个目录。
+
+现在：
+
+1. Release 工作流在打包时执行 `zip -r dsh-tts-server.zip tools/tts-server`，
+   排除 `node_modules`（首次 `start.cmd` 会自动安装），作为第二个附件发布
+2. README 增加「第一次安装（推荐路径）」四步
+3. 面板里的链接直达 README 的 `#本地语音服务可选` 小节
+
+对普通用户来说，路径变成：下载 zip → 解压 → 双击 start.cmd → 面板勾选。
+
+---
+
 ## [1.13.9] - 2026-11-20
 
 ### 变更
