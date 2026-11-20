@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.13.4
+// @version      1.13.5
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.13.4';
+  const LOCAL_VERSION = '1.13.5';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -138,13 +138,14 @@
     return out;
   }
 
-  function buildChunksFrom(start) {
+  function buildChunksFrom(start, maxChars) {
+    const limit = maxChars || CHUNK_CHARS;
     const chunks = [];
     let buf = '';
     let from = start;
     for (let i = start; i < state.sentences.length; i += 1) {
       const s = state.sentences[i];
-      if (buf && buf.length + s.length > CHUNK_CHARS) {
+      if (buf && buf.length + s.length > limit) {
         chunks.push({ text: buf, from, to: i });
         buf = s;
         from = i;
@@ -251,7 +252,7 @@
     return b;
   }
 
-  function lineRectAt(x, y, doc) {
+  function lineRectAt(x, y, doc, strict) {
     const el = deepElementFromPoint(x, y, doc);
     if (!el) return null;
     const block = blockOf(el);
@@ -276,6 +277,8 @@
         candidates.push({ node, rect, block });
       }
     }
+    // 悬停时只认命中：不要"最近的一行"，否则鼠标没在文字上也会亮
+    if (strict) return null;
     // 点在行与行之间的缝里时，取垂直距离最近的一行（否则会退回从头读）
     let best = null;
     let bestScore = Infinity;
@@ -600,6 +603,7 @@
     state.hlChunk = null;
     state.hlSearchPos = 0;
     clearPlayHighlight();
+    clearInterval(state.localTimer);
     render('朗读完成');
   }
 
@@ -607,7 +611,7 @@
 
   function localStop() {
     state.localToken += 1;
-    clearTimeout(state.localTimer);
+    clearInterval(state.localTimer);
     const a = state.localAudio;
     state.localAudio = null;
     if (a) {
@@ -657,8 +661,9 @@
     audio.volume = Math.max(0, Math.min(1, Number.isFinite(state.volume) ? state.volume : 1));
     audio.playbackRate = state.rate || 1;
     state.localAudio = audio;
-    audio.ontimeupdate = () => {
+    const paint = () => {
       if (token !== state.localToken) return;
+      if (audio.paused) return;
       const dur = audio.duration;
       if (!dur || !isFinite(dur)) return;
       const frac = Math.min(1, audio.currentTime / dur);
@@ -669,8 +674,13 @@
       }
       render();
     };
+    audio.ontimeupdate = paint;
+    // timeupdate 只有 4Hz，高亮会一跳一跳；补一个 80ms 的定时器让它跟得紧一些
+    clearInterval(state.localTimer);
+    state.localTimer = setInterval(paint, 80);
     audio.onended = () => {
       if (token !== state.localToken) return;
+      clearInterval(state.localTimer);
       if (c + 1 < state.chunks.length) localPlay(c + 1);
       else finish();
     };
@@ -801,7 +811,7 @@
     if (wasActive) synth.cancel();
     state.gen += 1;
     const gen = state.gen;
-    state.chunks = buildChunksFrom(idx);
+    state.chunks = buildChunksFrom(idx, 150);
     state.index = 0;
     state.progress = idx;
     state.queued = 0;
@@ -840,7 +850,7 @@
         startFrom(idx);
         return;
       }
-      state.chunks = buildChunksFrom(idx);
+      state.chunks = buildChunksFrom(idx, 150);
       state.queued = 0;
       localPlay(0);
       return;
@@ -1211,7 +1221,7 @@
       if (state.local) {
         if (!state.localReady) { toast('本地语音服务未启动'); return; }
         stop();
-        state.chunks = buildChunksFrom(i);
+        state.chunks = buildChunksFrom(i, 150);
         state.queued = 0;
         localPlay(0);
         toast('从第 ' + (i + 1) + ' / ' + state.sentences.length + ' 句开始');
@@ -1595,7 +1605,9 @@
         const target = hoverPath[0] || e.target;
         if (!target) { hideHighlight(d); return; }
         if (d === document && root && root.contains(target)) { hideHighlight(d); return; }
-        const line = lineRectAt(e.clientX, e.clientY, d);
+        // 朗读过程中不做悬停高亮：页面在自动滚动，鼠标位置对应的行一直在变，会闪
+        if (state.playing) { hideHighlight(d); return; }
+        const line = lineRectAt(e.clientX, e.clientY, d, true);
         if (!line || !line.rect) { hideHighlight(d); return; }
         if (!pickTurn(target) && (!line.block || line.block === d.body)) { hideHighlight(d); return; }
         const box = ensureHighlight(d);
