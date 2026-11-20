@@ -24,9 +24,9 @@ node scripts/release.mjs 1.x.x "一句话摘要"
 git add .
 git commit -m "feat: xxx (v1.x.x)"
 git tag -a v1.x.x -m "v1.x.x"
-git push
-git push origin v1.x.x
-# 4. GitHub 建 Release，附 .user.js
+git push --follow-tags origin main
+# 4. 推 tag 后 GitHub Actions 自动建 Release 并附上 .user.js
+#    （.github/workflows/release.yml，说明文字自动生成，可事后 Edit 润色）
 ```
 
 ---

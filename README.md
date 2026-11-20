@@ -44,15 +44,19 @@ dsh web（含 ThoughtDAG 画布）及其他本机页面；普通网站的正文�
 1. `node scripts/release.mjs 1.12.0 "一句话摘要"`
    —— 自动递增版本号（`@version` + `LOCAL_VERSION`）并往 CHANGELOG 插入一节模板
 2. 补全 CHANGELOG 里的「变更 / 修复 / 技术说明」
-3. 提交、打 tag、发 Release
+3. 提交并推 tag —— GitHub Actions 会自动建 Release 并附上脚本
 
 ```powershell
 node scripts/release.mjs 1.12.0 "支持普通网站正文朗读"
 git add .
 git commit -m "feat: 支持普通网站正文朗读 (v1.12.0)"
 git tag -a v1.12.0 -m "v1.12.0"
-git push && git push origin v1.12.0
+git push --follow-tags origin main
 ```
+
+> 推 `v*` 标签后，[.github/workflows/release.yml](.github/workflows/release.yml)
+> 会自动创建 Release、附上 `dsh-web-reader.user.js`。说明文字按提交自动生成，
+> 发布后可去 Release 页面点 Edit 润色。
 
 > 只改代码不写文档，未来的自己和 AI 都得重新考古。
 

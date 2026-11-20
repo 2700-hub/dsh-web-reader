@@ -1,0 +1,35 @@
+name: release
+
+# 推送 v* 标签时，自动创建 GitHub Release，并把 userscript 作为附件挂上。
+# 说明文字由 GitHub 按提交自动生成，发布后可以点 Edit 手动润色。
+#
+# 触发方式：
+#   git tag -a v1.12.3 -m "v1.12.3"
+#   git push --follow-tags origin main
+#
+# 只对本仓库生效；其他仓库需要各自放一份。
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dsh-web-reader.user.js
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
