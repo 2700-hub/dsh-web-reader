@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.4
+// @version      1.15.5
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.4';
+  const LOCAL_VERSION = '1.15.5';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -1690,11 +1690,10 @@
       const frac = Math.min(0.95, elapsed / total);
       if (ring) ring.style.strokeDashoffset = String(50.27 * (1 - frac));
       if (!label) return;
-      const left = (total - elapsed) / 1000;
-      window.__dshLoad = { totalMs: Math.round(total), elapsedMs: elapsed };
-      label.textContent = left > 0
-        ? '预计还需 ' + left.toFixed(1) + ' 秒'
-        : '已超预估 ' + (-left).toFixed(1) + ' 秒';
+      // 只减不增：线性减到 0.1 后停住（"砍一刀"式，永远差一点点）
+      const left = Math.max(0.1, (total - elapsed) / 1000);
+      window.__dshLoad = { totalMs: Math.round(total), elapsedMs: elapsed, leftMs: Math.round(left * 1000) };
+      label.textContent = '预计还需 ' + left.toFixed(1) + ' 秒';
     };
     paint();
     loadingTimer = setInterval(paint, 100);
