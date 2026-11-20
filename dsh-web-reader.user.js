@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.12.3
+// @version      1.12.4
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.12.3';
+  const LOCAL_VERSION = '1.12.4';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -70,6 +70,7 @@
     chunks: [],
     index: 0,
     queued: 0,
+    progress: 0,
     rate: Number(localStorage.getItem(LS_RATE) || 1) || 1,
     voiceName: localStorage.getItem(LS_VOICE) || '',
     volume: Number(localStorage.getItem(LS_VOL) ?? 1),
@@ -134,7 +135,7 @@
     for (let i = start; i < state.sentences.length; i += 1) {
       const s = state.sentences[i];
       if (buf && buf.length + s.length > CHUNK_CHARS) {
-        chunks.push({ text: buf, from });
+        chunks.push({ text: buf, from, to: i });
         buf = s;
         from = i;
       } else {
@@ -142,7 +143,7 @@
         buf += (buf && !/[。！？!?；;…]$/.test(buf) ? '\n' : '') + s;
       }
     }
-    if (buf) chunks.push({ text: buf, from });
+    if (buf) chunks.push({ text: buf, from, to: state.sentences.length });
     return chunks;
   }
 
@@ -528,6 +529,7 @@
     state.paused = false;
     state.chunks = [];
     state.index = 0;
+    state.progress = 0;
     state.queued = 0;
     state.current = null;
     state.hlCache = null;
@@ -543,6 +545,7 @@
     state.paused = false;
     state.current = null;
     state.index = state.chunks.length;
+    state.progress = state.sentences.length;
     state.hlChunk = null;
     state.hlSearchPos = 0;
     clearPlayHighlight();
@@ -562,6 +565,7 @@
     u.onstart = () => {
       if (gen !== state.gen) return;
       state.index = i;
+      state.progress = chunk.from;
       state.current = chunk.text;
       state.boundary = null;
       if (state.scopeEl) {
@@ -576,6 +580,11 @@
       if (gen !== state.gen) return;
       if (typeof ev.charIndex !== 'number') return;
       state.boundary = { i, charIndex: ev.charIndex };
+      // 段内也推进进度条，否则一段几百字走完条都不动
+      const span = (chunk.to != null ? chunk.to : chunk.from + 1) - chunk.from;
+      const frac = chunk.text.length ? Math.min(1, Math.max(0, ev.charIndex / chunk.text.length)) : 0;
+      state.progress = chunk.from + frac * span;
+      render();
       if (state.scopeEl) queueCharHighlight(state.scopeEl, chunk.text, ev.charIndex);
     };
 
@@ -626,6 +635,7 @@
     const gen = state.gen;
     state.chunks = buildChunksFrom(idx);
     state.index = 0;
+    state.progress = idx;
     state.queued = 0;
     state.playing = true;
     state.paused = false;
@@ -787,7 +797,6 @@
         <button data-act="rate" title="语速">⚡</button>
         <button data-act="vol" title="音量">🔉</button>
         <button data-act="pause" title="暂停 / 继续">⏸</button>
-        <button data-act="stop" title="停止">■</button>
         <button class="dshr-min" title="收起/展开">–</button>
         <button class="dshr-close" title="关闭面板（Alt+P 找回）">×</button>
       </div>
@@ -938,7 +947,6 @@
     });
 
     btnPause.addEventListener('click', togglePause);
-    root.querySelector('[data-act="stop"]').addEventListener('click', () => stop());
 
     // ---------- 进度条：可拖动、可点击 ----------
     let dragging = false;
@@ -1159,11 +1167,14 @@
   function render(msg) {
     if (!root) return;
     const total = state.sentences.length || 0;
-    const done = state.chunks[state.index] ? state.chunks[state.index].from : (state.playing ? 0 : total);
+    const chunkFrom = state.chunks[state.index] ? state.chunks[state.index].from : (state.playing ? 0 : total);
+    // 朗读中用段内进度（逐字推进），停下时才回落到段落起点
+    const done = state.playing ? Math.min(total, Math.max(0, state.progress || 0)) : chunkFrom;
+    const shown = total ? Math.min(total, Math.floor(done) + 1) : 0;
 
     if (msg) statusEl.textContent = msg;
     else if (state.playing) {
-      statusEl.textContent = (state.paused ? '已暂停' : '朗读中') + ' · 第 ' + (done + 1) + ' / ' + total + ' 句';
+      statusEl.textContent = (state.paused ? '已暂停' : '朗读中') + ' · 第 ' + shown + ' / ' + total + ' 句';
     } else if (total && done >= total) {
       statusEl.textContent = '朗读完成';
     }
