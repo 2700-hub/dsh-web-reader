@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.1
+// @version      1.15.2
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.1';
+  const LOCAL_VERSION = '1.15.2';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -1652,16 +1652,17 @@
     latencyLen = len;
     state.loadingT0 = t0;
     state.loadingLen = len;
+    let target = Math.max(800, total);
     const paint = () => {
       const elapsed = Date.now() - t0;
-      const frac = Math.min(0.95, elapsed / total);
+      // 快到 0 还没出声就续期 0.5 秒，保证始终显示具体秒数
+      if (elapsed > target - 120) target = elapsed + 500;
+      const frac = Math.min(0.95, elapsed / target);
       if (ring) ring.style.strokeDashoffset = String(50.27 * (1 - frac));
       if (!label) return;
-      const left = (total - elapsed) / 1000;
-      window.__dshLoad = { totalMs: Math.round(total), elapsedMs: elapsed };
-      if (left > 0.15) label.textContent = '预计还需 ' + left.toFixed(1) + ' 秒';
-      else if (elapsed < total * 1.02) label.textContent = '正在合成 · 即将开始';
-      else label.textContent = '正在合成 · 比预估慢，继续等待…';
+      const left = Math.max(0, (target - elapsed) / 1000);
+      window.__dshLoad = { totalMs: Math.round(target), elapsedMs: elapsed };
+      label.textContent = '预计还需 ' + left.toFixed(1) + ' 秒';
     };
     paint();
     loadingTimer = setInterval(paint, 100);
