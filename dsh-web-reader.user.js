@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.7
+// @version      1.15.8
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.7';
+  const LOCAL_VERSION = '1.15.8';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -68,6 +68,9 @@
   ].join(',');
 
   // 界面文字（token 用量、耗时、模型名等）：即使被当成块也要排除
+  // 提问/用户消息：自动朗读从回答首句开始，不把它们带进来
+  const USER_SEL = '[data-role="user"], [data-turn-user], [class*="user-message"], [class*="user-query"], [class*="question"]';
+
   const META_TEXT_RE = /(tokens?\s*[:：]?\s*[\d,.]|token\s*用量|上下文|context\s*(usage|window)|生成耗时|耗时\s*[:：]?\s*[\d.]|模型\s*[:：]|model\s*[:：]|用时\s*[\d.]+\s*(s|秒))/i;
 
   function looksLikeMeta(text) {
@@ -816,7 +819,7 @@
     const scope = scopeOfTurn(turn) || turn;
     const blocks = collectBlocks(scope).filter((b) => {
       try {
-        if (b.el.closest(EXCLUDE_SEL)) return false;
+        if (b.el.closest(EXCLUDE_SEL + ',' + USER_SEL)) return false;
         return !looksLikeMeta(b.el.innerText || b.el.textContent || '');
       } catch (err) { return true; }
     });
