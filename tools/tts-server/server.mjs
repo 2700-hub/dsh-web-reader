@@ -31,7 +31,7 @@ let queue = Promise.resolve();
 async function ensureEngine() {
   if (!engine) {
     engine = new MsEdgeTTS();
-    engineReady = engine.setMetadata(VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+    engineReady = engine.setMetadata(VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3, { wordBoundaryEnabled: true });
   }
   await engineReady;
   return engine;
@@ -51,17 +51,34 @@ function enqueue(fn) {
 
 // 合成一段并返回完整 Buffer（带 content-length，浏览器能可靠地开始播放；
 // 流式响应虽然首字更早，但没有长度时 Chrome 会一直缓冲，实测反而更慢）
+function parseBoundaries(meta) {
+  const out = [];
+  const re = /"Type"\s*:\s*"WordBoundary"[\s\S]*?"Offset"\s*:\s*(\d+)[\s\S]*?"Duration"\s*:\s*(\d+)[\s\S]*?"Text"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+  let m;
+  while ((m = re.exec(meta))) {
+    let word = m[3];
+    try { word = JSON.parse('"' + word + '"'); } catch (err) { /* 原样 */ }
+    out.push({ t: Math.round(Number(m[1]) / 10000), d: Math.round(Number(m[2]) / 10000), w: word });
+  }
+  return out;
+}
+
 async function synthBuffer(text) {
   const key = keyOf(text);
   const file = path.join(CACHE_DIR, key + '.mp3');
+  const timingFile = path.join(CACHE_DIR, key + '.timings.json');
   if (fs.existsSync(file)) {
-    return { buffer: fs.readFileSync(file), cached: true };
+    let timings = [];
+    try { timings = JSON.parse(fs.readFileSync(timingFile, 'utf8')); } catch (err) { timings = []; }
+    return { buffer: fs.readFileSync(file), cached: true, timings };
   }
 
   return enqueue(async () => {
     const tts = await ensureEngine();
     const res = tts.toStream(text);
     const stream = res.audioStream || res;
+    let meta = '';
+    if (res.metadataStream) res.metadataStream.on('data', (d) => { meta += d.toString(); });
 
     const chunks = [];
     try {
@@ -80,8 +97,11 @@ async function synthBuffer(text) {
       throw err;
     }
     const buffer = Buffer.concat(chunks);
+    await new Promise((r) => setTimeout(r, 120)); // 等 metadata 流收尾
+    const timings = parseBoundaries(meta);
     try { fs.writeFileSync(file, buffer); } catch (err) { /* 缓存失败不影响播放 */ }
-    return { buffer, cached: false };
+    try { fs.writeFileSync(timingFile, JSON.stringify(timings)); } catch (err) { /* 忽略 */ }
+    return { buffer, cached: false, timings };
   });
 }
 
@@ -92,7 +112,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
   if (url.pathname === '/health') {
-    res.writeHead(200, { 'content-type': 'application/json' });
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: true, voice: VOICE }));
     return;
   }
@@ -112,6 +132,19 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       console.error('[tts] 失败:', (err && (err.stack || err.message)) || String(err));
       try { res.end(); } catch (e) { /* 忽略 */ }
+    }
+    return;
+  }
+
+  if (url.pathname === '/timings') {
+    const text = (url.searchParams.get('text') || '').slice(0, 2000);
+    const file = path.join(CACHE_DIR, keyOf(text) + '.timings.json');
+    if (fs.existsSync(file)) {
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=86400' });
+      res.end(fs.readFileSync(file));
+    } else {
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end('[]');
     }
     return;
   }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.13.6
+// @version      1.13.7
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.13.6';
+  const LOCAL_VERSION = '1.13.7';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -80,6 +80,8 @@
     localToken: 0,
     localTimer: 0,
     localUrls: new Map(),
+    localTimings: new Map(),
+    timingMaps: new Map(),
     rate: Number(localStorage.getItem(LS_RATE) || 1) || 1,
     voiceName: localStorage.getItem(LS_VOICE) || '',
     volume: Number(localStorage.getItem(LS_VOL) ?? 1),
@@ -621,6 +623,9 @@
       if (typeof u === 'string') { try { URL.revokeObjectURL(u); } catch (err) { /* 忽略 */ } }
     });
     state.localUrls.clear();
+    state.localTimings.clear();
+    state.timingMaps.clear();
+    setLoading(false);
   }
 
   // 预取：把接下来几段的音频先取下来（blob），播的时候就不用等网络
@@ -647,6 +652,31 @@
     }
   }
 
+  // 用服务端返回的逐词时间戳定位字符；没有就回退到按比例估算
+  function charIndexAt(c, chunk, ms) {
+    const list = state.localTimings.get(c);
+    if (!list || !list.length) return null;
+    let map = state.timingMaps.get(c);
+    if (!map) {
+      map = [];
+      let cursor = 0;
+      for (const item of list) {
+        const idx = chunk.text.indexOf(item.w, cursor);
+        if (idx < 0) continue;
+        map.push({ t: item.t, i: idx });
+        cursor = idx + item.w.length;
+      }
+      state.timingMaps.set(c, map);
+    }
+    if (!map.length) return null;
+    let cur = 0;
+    for (const m of map) {
+      if (ms >= m.t) cur = m.i;
+      else break;
+    }
+    return cur;
+  }
+
   function localAudioFor(c, token) {
     const chunk = state.chunks[c];
     if (!chunk) { finish(); return; }
@@ -670,7 +700,9 @@
       const span = (chunk.to != null ? chunk.to : chunk.from + 1) - chunk.from;
       state.progress = chunk.from + frac * span;
       if (state.scopeEl) {
-        highlightChar(state.scopeEl, chunk.text, Math.min(chunk.text.length - 1, Math.floor(frac * chunk.text.length)));
+        const exact = charIndexAt(c, chunk, audio.currentTime * 1000);
+        const ci = exact != null ? exact : Math.floor(frac * chunk.text.length);
+        highlightChar(state.scopeEl, chunk.text, Math.min(chunk.text.length - 1, ci));
       }
       render();
     };
@@ -690,6 +722,23 @@
       state.playing = false;
       render();
     };
+    // 时间戳可能比音频晚一点写入服务端缓存，空结果时重试几次
+    const loadTimings = (attempt) => {
+      fetch(LOCAL_TTS + '/timings?text=' + encodeURIComponent(chunk.text))
+        .then((r) => r.json())
+        .then((list) => {
+          if (token !== state.localToken) return;
+          if (Array.isArray(list) && list.length) { state.localTimings.set(c, list); return; }
+          if (attempt < 4) setTimeout(() => loadTimings(attempt + 1), 500);
+        })
+        .catch(() => { /* 没有时间戳就用估算 */ });
+    };
+    loadTimings(0);
+    audio.addEventListener('playing', () => {
+      if (token !== state.localToken) return;
+      setLoading(false);
+      if (!state.localTimings.has(c)) loadTimings(2);
+    });
     audio.play().catch((err) => {
       if (token !== state.localToken) return;
       state.playing = false;
@@ -721,6 +770,7 @@
     state.current = chunk.text;
     state.hlSearchPos = 0;
     render();
+    setLoading(true);
     localAudioFor(c, token);
   }
 
@@ -971,6 +1021,12 @@
         transition: width .2s ease; pointer-events: none; }
       #dsh-reader .dshr-hint { opacity: .5; font-size: 11px; margin-top: 4px; min-height: 14px; }
       #dsh-reader .dshr-status { opacity: .8; margin-top: 6px; min-height: 18px; word-break: break-all; }
+      #dsh-reader .dshr-loading { display: none; gap: 3px; align-items: center; margin-left: 6px; vertical-align: middle; }
+      #dsh-reader .dshr-loading i { width: 4px; height: 4px; border-radius: 50%; background: #6b8afd; display: block;
+        animation: dshr-blink 1s infinite ease-in-out; }
+      #dsh-reader .dshr-loading i:nth-child(2) { animation-delay: .15s; }
+      #dsh-reader .dshr-loading i:nth-child(3) { animation-delay: .3s; }
+      @keyframes dshr-blink { 0%, 80%, 100% { opacity: .2; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
       #dsh-reader .dshr-cur { opacity: .55; margin-top: 2px; max-height: 36px; overflow: hidden; word-break: break-all; }
       #dsh-reader select, #dsh-reader input[type=range] { width: 100%; }
       #dsh-reader select { background: rgba(255,255,255,.07); color: #e8eaed; border: 1px solid rgba(255,255,255,.16);
@@ -1017,6 +1073,7 @@
       <div class="dshr-collapsible">
         <div class="dshr-hint">拖动/点击进度条跳句 · Alt+点正文从该句开始</div>
         <div class="dshr-status">就绪 · Alt+点击任意消息朗读</div>
+        <div class="dshr-loading"><i></i><i></i><i></i><span style="margin-left:2px">正在合成…</span></div>
         <div class="dshr-cur"></div>
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
         <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-local-cb"> 本地语音服务（云健 · 无句间停顿）</label></div>
@@ -1456,6 +1513,12 @@
     if (bar) bar.style.width = pct + '%';
     if (curEl) curEl.textContent = state.current && state.playing ? state.current : '';
     if (btnPause) btnPause.textContent = state.paused ? '▶' : '⏸';
+  }
+
+  function setLoading(on) {
+    if (!root) return;
+    const el = root.querySelector('.dshr-loading');
+    if (el) el.style.display = on ? 'inline-flex' : 'none';
   }
 
   let toastEl = null;
