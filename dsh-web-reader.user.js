@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.6
+// @version      1.15.7
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.6';
+  const LOCAL_VERSION = '1.15.7';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -63,7 +63,22 @@
   const EXCLUDE_SEL = [
     '[data-turn-process-think]', '[data-turn-process-reasoning]', '[data-reasoning]',
     '[class*="reasoning"]', '[class*="thinking"]', '[class*="think-"]', 'details',
+    '[data-usage]', '[class*="usage"]', '[class*="token"]', '[class*="Token"]',
+    '[data-actions-reveal]', '[data-actions]', '[class*="action-bar"]', '[class*="toolbar"]',
   ].join(',');
+
+  // 界面文字（token 用量、耗时、模型名等）：即使被当成块也要排除
+  const META_TEXT_RE = /(tokens?\s*[:：]?\s*[\d,.]|token\s*用量|上下文|context\s*(usage|window)|生成耗时|耗时\s*[:：]?\s*[\d.]|模型\s*[:：]|model\s*[:：]|用时\s*[\d.]+\s*(s|秒))/i;
+
+  function looksLikeMeta(text) {
+    const t = String(text || '').trim();
+    if (!t) return true;
+    if (META_TEXT_RE.test(t)) return true;
+    const cjk = (t.match(/[\u4e00-\u9fa5]/g) || []).length;
+    if (cjk < 2) return true;                       // 纯数字/符号
+    if (cjk < 6 && !/[。！？!?，,.]/.test(t)) return true; // 太短又没有标点
+    return false;
+  }
   const LS_RATE = 'dsh-reader.rate';
   const LS_VOICE = 'dsh-reader.voice';
   const LS_VOL = 'dsh-reader.volume';
@@ -800,7 +815,10 @@
   function autoTextOf(turn) {
     const scope = scopeOfTurn(turn) || turn;
     const blocks = collectBlocks(scope).filter((b) => {
-      try { return !b.el.closest(EXCLUDE_SEL); } catch (err) { return true; }
+      try {
+        if (b.el.closest(EXCLUDE_SEL)) return false;
+        return !looksLikeMeta(b.el.innerText || b.el.textContent || '');
+      } catch (err) { return true; }
     });
     const text = blocks.length ? textFromBlocks(blocks) : '';
     return { scope, text };
@@ -843,6 +861,8 @@
       timer = setTimeout(() => maybeAutoRead(turn), 2000); // 生成停顿 2 秒再读（避开思考阶段）
     });
     obs.observe(scope, { childList: true, subtree: true, characterData: true });
+    // 内容一次性出现（没有后续变化）时，也要有一次初始检查
+    setTimeout(() => maybeAutoRead(turn), 1500);
   }
 
   function startAutoRead() {
