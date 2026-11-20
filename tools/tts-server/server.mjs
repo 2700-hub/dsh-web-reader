@@ -57,29 +57,44 @@ function keyOf(text) {
 
 // 复用同一个连接：每次新建 WebSocket 要多花 1–2 秒（实测 setMetadata 约 1.1 秒），
 // 复用后第二句起首字节能降到 0.7 秒左右。
-let engine = null;
-let engineReady = null;
-let queue = Promise.resolve();
+const engines = { high: null, low: null };
+const engineReady = { high: null, low: null };
 
-async function ensureEngine() {
-  if (!engine) {
-    engine = new MsEdgeTTS();
-    engineReady = engine.setMetadata(VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3, { wordBoundaryEnabled: true });
+async function ensureEngine(priority) {
+  const p = priority === 'high' ? 'high' : 'low';
+  if (!engines[p]) {
+    engines[p] = new MsEdgeTTS();
+    engineReady[p] = engines[p].setMetadata(VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3, { wordBoundaryEnabled: true });
   }
-  await engineReady;
-  return engine;
+  await engineReady[p];
+  return engines[p];
 }
 
-function resetEngine() {
-  engine = null;
-  engineReady = null;
+function resetEngine(priority) {
+  const p = priority === 'high' ? 'high' : 'low';
+  engines[p] = null;
+  engineReady[p] = null;
 }
 
-// 串行化请求：一个连接同时只跑一段
-function enqueue(fn) {
-  const run = queue.then(fn, fn);
-  queue = run.then(() => {}, () => {});
-  return run;
+// 优先级队列：交互请求（用户点的第一段）插到预取前面，避免被堵
+const queues = { high: [], low: [] };
+const running = { high: false, low: false };
+function pump(priority) {
+  if (running[priority]) return;
+  const job = queues[priority].shift();
+  if (!job) return;
+  running[priority] = true;
+  Promise.resolve()
+    .then(job.fn)
+    .then(job.resolve, job.reject)
+    .finally(() => { running[priority] = false; pump(priority); });
+}
+function enqueue(fn, priority) {
+  const p = priority === 'high' ? 'high' : 'low';
+  return new Promise((resolve, reject) => {
+    queues[p].push({ fn, resolve, reject });
+    pump(p);
+  });
 }
 
 // 合成一段并返回完整 Buffer（带 content-length，浏览器能可靠地开始播放；
@@ -96,7 +111,7 @@ function parseBoundaries(meta) {
   return out;
 }
 
-async function synthBuffer(text) {
+async function synthBuffer(text, priority) {
   const key = keyOf(text);
   const file = path.join(CACHE_DIR, key + '.mp3');
   const timingFile = path.join(CACHE_DIR, key + '.timings.json');
@@ -107,7 +122,7 @@ async function synthBuffer(text) {
   }
 
   return enqueue(async () => {
-    const tts = await ensureEngine();
+    const tts = await ensureEngine(priority);
     const res = tts.toStream(text);
     const stream = res.audioStream || res;
     let meta = '';
@@ -126,7 +141,7 @@ async function synthBuffer(text) {
         });
       });
     } catch (err) {
-      resetEngine();
+      resetEngine(priority);
       throw err;
     }
     const buffer = Buffer.concat(chunks);
@@ -137,7 +152,7 @@ async function synthBuffer(text) {
     cacheWrites += 1;
     if (cacheWrites % 20 === 0) pruneCache();
     return { buffer, cached: false, timings };
-  });
+  }, priority);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -156,7 +171,8 @@ const server = http.createServer(async (req, res) => {
     const text = (url.searchParams.get('text') || '').slice(0, 2000);
     if (!text.trim()) { res.writeHead(400); res.end('text required'); return; }
     try {
-      const r = await synthBuffer(text);
+      const priority = url.searchParams.get('priority') === 'high' ? 'high' : 'low';
+      const r = await synthBuffer(text, priority);
       res.writeHead(200, {
         'content-type': 'audio/mpeg',
         'content-length': r.buffer.length,
@@ -197,7 +213,6 @@ server.listen(PORT, '127.0.0.1', () => {
     ALL_PROXY: process.env.ALL_PROXY || null,
   }));
   pruneCache();
-  ensureEngine()
-    .then(() => console.log('[engine] 就绪（连接已预建）'))
-    .catch((e) => console.error('[engine] 失败:', e && (e.stack || e.message) || String(e)));
+  ensureEngine('high').then(() => console.log('[engine] 高优先级连接就绪')).catch(() => {});
+  ensureEngine('low').then(() => console.log('[engine] 预取连接就绪')).catch(() => {});
 });

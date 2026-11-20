@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.9
+// @version      1.15.10
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.9';
+  const LOCAL_VERSION = '1.15.10';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -655,11 +655,11 @@
 
   // 预取：把接下来几段的音频先取下来（blob），播的时候就不用等网络
   function localPrefetch(from) {
-    for (let k = from; k < Math.min(from + 3, state.chunks.length); k += 1) {
+    for (let k = from; k < Math.min(from + 2, state.chunks.length); k += 1) {
       if (state.localUrls.has(k)) continue;
       const chunk = state.chunks[k];
       if (!chunk) continue;
-      const p = fetch(LOCAL_TTS + '/tts?text=' + encodeURIComponent(chunk.text))
+      const p = fetch(LOCAL_TTS + '/tts?text=' + encodeURIComponent(chunk.text) + '&priority=low')
         .then((r) => {
           if (!r.ok) throw new Error('HTTP ' + r.status);
           return r.blob();
@@ -710,7 +710,7 @@
     // 首字延迟取决于云端首包，而不是整段合成完。
     const src = typeof cached === 'string'
       ? cached
-      : (LOCAL_TTS + '/tts?text=' + encodeURIComponent(chunk.text));
+      : (LOCAL_TTS + '/tts?text=' + encodeURIComponent(chunk.text) + '&priority=high');
 
     const audio = new Audio(src);
     audio.volume = Math.max(0, Math.min(1, Number.isFinite(state.volume) ? state.volume : 1));
@@ -771,24 +771,28 @@
       toast('播放被拦截：' + (err && err.message ? err.message : err));
       render();
     });
-    // 后两段提前取成 blob，轮到它们时不再碰网络
-    localPrefetch(c + 1);
+    // 下一段延后预取：先让当前段出声，避免抢走连接
+    setTimeout(() => { if (token === state.localToken) localPrefetch(c + 1); }, 600);
   }
 
   // 本地模式：首段只放第一句，让声音尽快出来；后面再按 150 字合并
   function localBuildChunks(idx) {
     const first = state.sentences[idx];
     if (!first) return [];
-    // 首段再切小：长句在第一个逗号处断开，缩短首段合成与缓冲时间
+    // 首段压到 12–14 字：合成和缓冲都更快，先出声再继续
+    const LIMIT = 14;
     let head = first;
-    let headEnd = idx + 1;
-    if (first.length > 20) {
-      const cut = first.search(/[，,、：:]/);
-      if (cut > 4) { head = first.slice(0, cut + 1); }
+    if (first.length > LIMIT) {
+      let cut = -1;
+      for (let i = 4; i < LIMIT; i += 1) {
+        if (/[，,、：:；;]/.test(first[i])) { cut = i; break; }
+      }
+      if (cut < 0) cut = LIMIT - 1;
+      head = first.slice(0, cut + 1);
     }
-    const rest = head === first ? [] : [first.slice(head.length)];
-    const chunks = [{ text: head, from: idx, to: headEnd }];
-    if (rest.length) chunks.push({ text: rest[0], from: idx, to: idx + 1 });
+    const chunks = [{ text: head, from: idx, to: idx + 1 }];
+    const tail = first.slice(head.length);
+    if (tail) chunks.push({ text: tail, from: idx, to: idx + 1 });
     return chunks.concat(buildChunksFrom(idx + 1, 150));
   }
 
