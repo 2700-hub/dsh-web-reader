@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.3
+// @version      1.15.4
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.3';
+  const LOCAL_VERSION = '1.15.4';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -1645,8 +1645,22 @@
   }
 
   const LS_LAT = 'dsh-reader.ttslatency';
+  const LS_SAMPLES = 'dsh-reader.ttsSamples';
   let latencyMs = Number(localStorage.getItem(LS_LAT) || 1200) || 1200;
   let latencyLen = 100;
+  let latencySamples = [];
+  try { latencySamples = JSON.parse(localStorage.getItem(LS_SAMPLES) || '[]'); } catch (err) { latencySamples = []; }
+  if (!Array.isArray(latencySamples)) latencySamples = [];
+
+  function estimateFor(len) {
+    const valid = latencySamples.filter((x) => x && x.ms > 0 && x.len > 0);
+    if (valid.length >= 2) {
+      const ratios = valid.map((x) => x.ms / x.len).sort((a, b) => a - b);
+      const median = ratios[Math.floor(ratios.length / 2)];
+      return Math.max(500, Math.min(15000, Math.round(median * len + 250)));
+    }
+    return Math.max(500, Math.min(15000, Math.round(latencyMs + len * 8)));
+  }
 
   let loadingTimer = 0;
   function setLoading(on, textLen) {
@@ -1666,23 +1680,21 @@
     const label = el.querySelector('.dshr-loading-text');
     // 用历史耗时估算本次等待，并按字数比例缩放
     const len = Math.max(10, textLen || 100);
-    const ratio = Math.max(0.5, Math.min(3, len / latencyLen));
-    const total = Math.max(500, Math.min(9000, latencyMs * ratio));
+    const total = estimateFor(len);
     const t0 = Date.now();
     latencyLen = len;
     state.loadingT0 = t0;
     state.loadingLen = len;
-    let target = Math.max(800, total);
     const paint = () => {
       const elapsed = Date.now() - t0;
-      // 快到 0 还没出声就续期 0.5 秒，保证始终显示具体秒数
-      if (elapsed > target - 120) target = elapsed + 500;
-      const frac = Math.min(0.95, elapsed / target);
+      const frac = Math.min(0.95, elapsed / total);
       if (ring) ring.style.strokeDashoffset = String(50.27 * (1 - frac));
       if (!label) return;
-      const left = Math.max(0, (target - elapsed) / 1000);
-      window.__dshLoad = { totalMs: Math.round(target), elapsedMs: elapsed };
-      label.textContent = '预计还需 ' + left.toFixed(1) + ' 秒';
+      const left = (total - elapsed) / 1000;
+      window.__dshLoad = { totalMs: Math.round(total), elapsedMs: elapsed };
+      label.textContent = left > 0
+        ? '预计还需 ' + left.toFixed(1) + ' 秒'
+        : '已超预估 ' + (-left).toFixed(1) + ' 秒';
     };
     paint();
     loadingTimer = setInterval(paint, 100);
@@ -1693,9 +1705,14 @@
   // 实际出声后回填耗时，下次估算更准
   function noteLatency() {
     if (!state.loadingT0) return;
-    const sample = Math.max(200, Math.min(15000, Date.now() - state.loadingT0));
+    const sample = Math.max(150, Math.min(15000, Date.now() - state.loadingT0));
     latencyMs = Math.round(latencyMs * 0.7 + sample * 0.3);
-    try { localStorage.setItem(LS_LAT, String(latencyMs)); } catch (err) { /* 忽略 */ }
+    latencySamples.push({ ms: sample, len: Math.max(10, state.loadingLen || 100) });
+    if (latencySamples.length > 12) latencySamples = latencySamples.slice(-12);
+    try {
+      localStorage.setItem(LS_LAT, String(latencyMs));
+      localStorage.setItem(LS_SAMPLES, JSON.stringify(latencySamples));
+    } catch (err) { /* 忽略 */ }
     state.loadingT0 = 0;
   }
 
