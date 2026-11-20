@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.14.0
+// @version      1.14.1
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.14.0';
+  const LOCAL_VERSION = '1.14.1';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -736,6 +736,7 @@
     loadTimings(0);
     audio.addEventListener('playing', () => {
       if (token !== state.localToken) return;
+      noteLatency();
       setLoading(false);
       if (!state.localTimings.has(c)) loadTimings(2);
     });
@@ -770,7 +771,7 @@
     state.current = chunk.text;
     state.hlSearchPos = 0;
     render();
-    setLoading(true, 600 + (chunk.text.length * 12));
+    setLoading(true, chunk.text.length);
     localAudioFor(c, token);
   }
 
@@ -1552,8 +1553,12 @@
     if (btnPause) btnPause.textContent = state.paused ? '▶' : '⏸';
   }
 
+  const LS_LAT = 'dsh-reader.ttslatency';
+  let latencyMs = Number(localStorage.getItem(LS_LAT) || 1200) || 1200;
+  let latencyLen = 100;
+
   let loadingTimer = 0;
-  function setLoading(on, estMs) {
+  function setLoading(on, textLen) {
     if (!root) return;
     const el = root.querySelector('.dshr-loading');
     if (!el) return;
@@ -1562,17 +1567,35 @@
     el.style.display = 'inline-flex';
     const ring = el.querySelector('.dshr-ring');
     const label = el.querySelector('.dshr-loading-text');
-    const total = Math.max(600, Math.min(6000, estMs || 1200));
+    // 用历史耗时估算本次等待，并按字数比例缩放
+    const len = Math.max(10, textLen || 100);
+    const ratio = Math.max(0.5, Math.min(3, len / latencyLen));
+    const total = Math.max(500, Math.min(9000, latencyMs * ratio));
     const t0 = Date.now();
+    latencyLen = len;
+    state.loadingT0 = t0;
+    state.loadingLen = len;
     const paint = () => {
       const elapsed = Date.now() - t0;
       const frac = Math.min(0.95, elapsed / total);
       if (ring) ring.style.strokeDashoffset = String(50.27 * (1 - frac));
-      const left = Math.max(0, (total - elapsed) / 1000);
-      if (label) label.textContent = left > 0.2 ? '正在合成 · 约 ' + left.toFixed(1) + ' 秒' : '正在合成 · 即将开始';
+      if (!label) return;
+      const left = (total - elapsed) / 1000;
+      if (left > 0.15) label.textContent = '正在合成 · 约 ' + left.toFixed(1) + ' 秒';
+      else if (elapsed < total * 1.02) label.textContent = '正在合成 · 即将开始';
+      else label.textContent = '正在合成 · 比预估慢，继续等待…';
     };
     paint();
     loadingTimer = setInterval(paint, 100);
+  }
+
+  // 实际出声后回填耗时，下次估算更准
+  function noteLatency() {
+    if (!state.loadingT0) return;
+    const sample = Math.max(200, Math.min(15000, Date.now() - state.loadingT0));
+    latencyMs = Math.round(latencyMs * 0.7 + sample * 0.3);
+    try { localStorage.setItem(LS_LAT, String(latencyMs)); } catch (err) { /* 忽略 */ }
+    state.loadingT0 = 0;
   }
 
   let toastEl = null;
