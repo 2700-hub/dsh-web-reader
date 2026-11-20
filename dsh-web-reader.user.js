@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.16
+// @version      1.15.17
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.16';
+  const LOCAL_VERSION = '1.15.17';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -731,16 +731,14 @@
     const cachedBlob = state.localUrls.get(c);
     const useBlob = typeof cachedBlob === 'string';
     state.loadingCached = useBlob;
-    // 没有本地 blob 就先问服务端是否命中缓存，避免把"缓存秒开"学成冷启动
-    const prepared = useBlob
-      ? Promise.resolve()
-      : fetch(LOCAL_TTS + '/stat?text=' + encodeURIComponent(chunk.text))
-          .then((r) => r.json())
-          .then((j) => { state.loadingCached = !!j.cached; })
-          .catch(() => { /* 忽略 */ });
-
-    prepared.then(() => {
-    if (token !== state.localToken) return;
+    state.loadingCachedResolved = useBlob;
+    // 并行查询缓存状态（不阻塞播放），只用于决定是否把这次耗时计入学习样本
+    if (!useBlob) {
+      fetch(LOCAL_TTS + '/stat?text=' + encodeURIComponent(chunk.text))
+        .then((r) => r.json())
+        .then((j) => { state.loadingCached = !!j.cached; state.loadingCachedResolved = true; })
+        .catch(() => { state.loadingCachedResolved = true; });
+    }
     const src = useBlob
       ? cachedBlob
       : (LOCAL_TTS + '/tts?text=' + encodeURIComponent(chunk.text) + '&priority=high');
@@ -805,7 +803,6 @@
     });
     // 下一段延后预取：先让当前段出声，避免抢走连接
     setTimeout(() => { if (token === state.localToken) localPrefetch(c + 1); }, 600);
-    });
   }
 
   // 本地模式：首段只放第一句，让声音尽快出来；后面再按 150 字合并
@@ -1834,7 +1831,8 @@
   // 实际出声后回填耗时，下次估算更准
   function noteLatency() {
     if (!state.loadingT0) return;
-    if (state.loadingCached) { state.loadingT0 = 0; return; }
+    // 缓存状态还没查清（或已命中缓存）时，不把这次耗时计入学习样本
+    if (!state.loadingCachedResolved || state.loadingCached) { state.loadingT0 = 0; return; }
     const sample = Math.max(150, Math.min(15000, Date.now() - state.loadingT0));
     latencyMs = Math.round(latencyMs * 0.7 + sample * 0.3);
     latencySamples.push({ ms: sample, len: Math.max(10, state.loadingLen || 100) });

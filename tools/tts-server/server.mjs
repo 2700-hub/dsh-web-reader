@@ -223,4 +223,27 @@ server.listen(PORT, '127.0.0.1', () => {
   pruneCache();
   ensureEngine('high').then(() => console.log('[engine] 高优先级连接就绪')).catch(() => {});
   ensureEngine('low').then(() => console.log('[engine] 预取连接就绪')).catch(() => {});
+
+  // 空闲会让连接冷掉，首次请求要多花几秒重建；定期合成一个极小文本保活
+  async function keepAlive(priority) {
+    if (running[priority]) return;
+    try {
+      await enqueue(async () => {
+        const tts = await ensureEngine(priority);
+        const res = tts.toStream('嗯');
+        const stream = res.audioStream;
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('keepalive timeout')), 8000);
+          stream.on('data', () => {});
+          stream.on('end', () => { clearTimeout(timer); resolve(); });
+          stream.on('error', (e) => { clearTimeout(timer); reject(e); });
+        });
+      }, priority);
+    } catch (err) {
+      resetEngine(priority);
+    }
+  }
+
+  setTimeout(() => { keepAlive('high'); keepAlive('low'); }, 1500);
+  setInterval(() => { keepAlive('high'); keepAlive('low'); }, 120000);
 });
