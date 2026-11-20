@@ -130,7 +130,7 @@ async function synthBuffer(text) {
       throw err;
     }
     const buffer = Buffer.concat(chunks);
-    await new Promise((r) => setTimeout(r, 120)); // 等 metadata 流收尾
+    await new Promise((r) => setTimeout(r, 40)); // 等 metadata 流收尾
     const timings = parseBoundaries(meta);
     try { fs.writeFileSync(file, buffer); } catch (err) { /* 缓存失败不影响播放 */ }
     try { fs.writeFileSync(timingFile, JSON.stringify(timings)); } catch (err) { /* 忽略 */ }

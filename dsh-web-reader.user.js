@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.5
+// @version      1.15.6
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.5';
+  const LOCAL_VERSION = '1.15.6';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -761,7 +761,17 @@
   function localBuildChunks(idx) {
     const first = state.sentences[idx];
     if (!first) return [];
-    return [{ text: first, from: idx, to: idx + 1 }].concat(buildChunksFrom(idx + 1, 150));
+    // 首段再切小：长句在第一个逗号处断开，缩短首段合成与缓冲时间
+    let head = first;
+    let headEnd = idx + 1;
+    if (first.length > 20) {
+      const cut = first.search(/[，,、：:]/);
+      if (cut > 4) { head = first.slice(0, cut + 1); }
+    }
+    const rest = head === first ? [] : [first.slice(head.length)];
+    const chunks = [{ text: head, from: idx, to: headEnd }];
+    if (rest.length) chunks.push({ text: rest[0], from: idx, to: idx + 1 });
+    return chunks.concat(buildChunksFrom(idx + 1, 150));
   }
 
   // 一段一个音频：当前段播的时候，后两段已经在本地备好
