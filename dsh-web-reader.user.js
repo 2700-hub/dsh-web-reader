@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.13.0
+// @version      1.13.1
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.13.0';
+  const LOCAL_VERSION = '1.13.1';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -292,23 +292,6 @@
     return hit ? { top: hit.rect.top, bottom: hit.rect.bottom, left: hit.rect.left, right: hit.rect.right, block: hit.block.tagName } : null;
   };
 
-  // 行首字符在该文本节点里的下标
-  function lineStartOf(node, rect) {
-    const d = docOf(node);
-    const len = (node.textContent || '').length;
-    if (!len) return 0;
-    const r = d.createRange();
-    const limit = Math.min(len, 3000);
-    for (let i = 0; i < limit; i += 1) {
-      r.setStart(node, i);
-      r.setEnd(node, Math.min(i + 1, len));
-      const rr = r.getClientRects()[0];
-      if (!rr) continue;
-      if (Math.abs(rr.top - rect.top) <= 2) return i;
-    }
-    return 0;
-  }
-
   // 鼠标位置对应的文本插入点（比按行矩形猜更准，行距缝隙里也能落到位）
   function caretAt(x, y, doc) {
     const d = doc || document;
@@ -325,45 +308,25 @@
     return null;
   }
 
-  // 行首 → 全文偏移
+  // 点击位置 → 全文偏移：只问浏览器光标落在哪，不再按行扫描
+  // （按行定位对"知道大概读到哪"没有帮助，还多一次点击时的计算）
   function offsetOfLineAtPoint(x, y, blocks, doc) {
-    // 优先用浏览器自己的命中结果：它会把坐标吸附到最近的文字位置
     const caret = caretAt(x, y, doc || document);
-    if (caret && caret.node) {
-      for (let i = 0; i < blocks.length; i += 1) {
-        const block = blocks[i];
-        if (block.el === caret.node || block.el.contains(caret.node)) {
-          try {
-            const cr = docOf(block.el).createRange();
-            cr.selectNodeContents(block.el);
-            cr.setEnd(caret.node, Math.min(caret.offset, (caret.node.textContent || '').length));
-            return block.start + cr.toString().length;
-          } catch (err) { /* 落到下面的矩形法 */ }
+    if (!caret || !caret.node) return null;
+    for (let i = 0; i < blocks.length; i += 1) {
+      const block = blocks[i];
+      if (block.el === caret.node || block.el.contains(caret.node)) {
+        try {
+          const cr = docOf(block.el).createRange();
+          cr.selectNodeContents(block.el);
+          cr.setEnd(caret.node, Math.min(caret.offset, (caret.node.textContent || '').length));
+          return block.start + cr.toString().length;
+        } catch (err) {
+          return block.start;
         }
       }
     }
-
-    const hit = lineRectAt(x, y, doc);
-    if (!hit) return null;
-    let block = null;
-    for (let i = 0; i < blocks.length; i += 1) {
-      if (blocks[i].el === hit.block || blocks[i].el.contains(hit.block)) { block = blocks[i]; break; }
-    }
-    // 命中的块比收集到的块更靠外（比如点到了包裹层）时，取它里面第一个块
-    if (!block) {
-      for (let i = 0; i < blocks.length; i += 1) {
-        if (hit.block.contains(blocks[i].el)) { block = blocks[i]; break; }
-      }
-    }
-    if (!block) return null;
-    try {
-      const r = docOf(block.el).createRange();
-      r.selectNodeContents(block.el);
-      r.setEnd(hit.node, lineStartOf(hit.node, hit.rect));
-      return block.start + r.toString().length;
-    } catch (err) {
-      return block.start;
-    }
+    return null;
   }
 
   /* ---------------- 朗读中的当前字高亮 ---------------- */
