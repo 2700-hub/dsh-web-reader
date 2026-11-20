@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.15.0
+// @version      1.15.1
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.15.0';
+  const LOCAL_VERSION = '1.15.1';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -1129,13 +1129,13 @@
         <button class="dshr-close" title="关闭面板（Alt+P 找回）">×</button>
       </div>
       <div class="dshr-bar" title="拖动或点击，从对应句子开始读"><i></i></div>
+      <div class="dshr-loading">
+        <svg viewBox="0 0 20 20" width="14" height="14"><circle class="dshr-ring-track" cx="10" cy="10" r="8"></circle><circle class="dshr-ring" cx="10" cy="10" r="8"></circle></svg>
+        <span class="dshr-loading-text">正在合成…</span>
+      </div>
       <div class="dshr-collapsible">
         <div class="dshr-hint">拖动/点击进度条跳句 · Alt+点正文从该句开始</div>
         <div class="dshr-status">就绪 · Alt+点击任意消息朗读</div>
-        <div class="dshr-loading">
-          <svg viewBox="0 0 20 20" width="14" height="14"><circle class="dshr-ring-track" cx="10" cy="10" r="8"></circle><circle class="dshr-ring" cx="10" cy="10" r="8"></circle></svg>
-          <span class="dshr-loading-text">正在合成…</span>
-        </div>
         <div class="dshr-cur"></div>
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
         <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-local-cb"> 本地语音服务（云健 · 无句间停顿）</label></div>
