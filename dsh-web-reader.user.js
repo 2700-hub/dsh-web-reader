@@ -796,7 +796,10 @@
     state.hlChunk = null;
     state.hlSearchPos = 0;
     clearPlayHighlight();
-    if (wasActive) synth.cancel();
+    if (wasActive) {
+      synth.cancel();
+      autoLog('stop', {});
+    }
     render();
   }
 
@@ -1298,6 +1301,7 @@
         <button data-act="rate" title="语速">⚡</button>
         <button data-act="vol" title="音量">🔉</button>
         <button data-act="pause" title="暂停 / 继续">⏸</button>
+        <button data-act="stop" title="停止（Alt+X）">⏹</button>
         <button class="dshr-min" title="收起/展开">–</button>
         <button class="dshr-close" title="关闭面板（Alt+P 找回）">×</button>
       </div>
@@ -1541,6 +1545,13 @@
     }
 
     btnPause.addEventListener('click', togglePause);
+    const btnStop = root.querySelector('[data-act="stop"]');
+    if (btnStop) {
+      btnStop.addEventListener('click', () => {
+        state.autoQueue.length = 0;
+        stop();
+      });
+    }
 
     // ---------- 进度条：可拖动、可点击 ----------
     let dragging = false;
@@ -2072,12 +2083,15 @@
 
   function handleKey(e) {
     if (!e.altKey || e.ctrlKey || e.metaKey) return;
-    const k = e.key.toLowerCase();
-    if (k === 'x') {
+    // 用 e.code：Windows 上 Alt+X 的 e.key 不一定是 'x'（可能是特殊字符）
+    const code = e.code || '';
+    const k = String(e.key || '').toLowerCase();
+    const is = (letter) => code === 'Key' + letter.toUpperCase() || k === letter;
+    if (is('x')) {
       e.preventDefault();
       state.autoQueue.length = 0;
       stop();
-    } else if (k === 'p') {
+    } else if (is('p')) {
       e.preventDefault();
       togglePanel();
     }
