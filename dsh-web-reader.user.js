@@ -47,6 +47,8 @@
 
   // 注入标记：Console 里敲 window.__dshProbe 就能确认脚本是否执行到这一行
   window.__dshProbe = 'v' + SCRIPT_VERSION;
+  // 构建标记：确认装的是哪一版（版本号没变时靠它区分）
+  window.__dshBuild = SCRIPT_VERSION + '+local-fallback';
 
   if (window.__dshReader) return;
   window.__dshReader = true;
