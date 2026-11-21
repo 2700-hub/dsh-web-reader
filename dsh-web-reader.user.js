@@ -104,6 +104,15 @@
   window.__dshState = state; // 调试用
   window.__dshHighlight = highlightChar; // 调试用
 
+  // 测试钩子：纯函数在 Node 里用 vm 加载本文件时可见（浏览器里只是多挂一个对象，无副作用）
+  window.__dshTest = {
+    splitSentences,
+    buildChunksFrom,
+    textFromBlocks,
+    compareVersions,
+    estimateFor,
+  };
+
   /* ---------------- 文本处理 ---------------- */
 
   function splitSentences(raw) {
@@ -1952,10 +1961,13 @@
   }
 
   // document-start 注入时 body 可能还不存在，等它出现
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-    setTimeout(boot, 300);
-  } else {
-    boot();
+  // __DSH_NO_BOOT 只给 Node 测试用：不碰 DOM，只加载纯函数
+  if (!window.__DSH_NO_BOOT) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', boot);
+      setTimeout(boot, 300);
+    } else {
+      boot();
+    }
   }
 })();

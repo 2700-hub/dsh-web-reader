@@ -1,0 +1,13 @@
+{
+  "name": "dsh-web-reader",
+  "version": "1.16.0",
+  "private": true,
+  "description": "dsh web 朗读 userscript（单文件分发，纯函数用 Node 内置测试跑）",
+  "scripts": {
+    "test": "node --test",
+    "test:watch": "node --test --watch"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
