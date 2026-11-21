@@ -31,6 +31,42 @@ git push --follow-tags origin main
 
 ---
 
+## [1.17.0] - 2026-11-21
+
+### 变更
+
+- **自动朗读 v2 回归**（1.16.0 曾整体移除）。这次只做一件事：新回复生成完，自动朗读它
+- 只读明确标出的回答：`[data-turn-process-answer]` 或 `[data-chat-flow-kind="assistant"]`
+- 追最新：正在自动朗读上一条时，新回复直接抢占；正在手动朗读时，则排队不打断
+- 面板新增 ⏹ 停止按钮；自动朗读同样有逐字高亮与自动滚动
+
+### 修复
+
+- Alt+X 改用 `e.code === 'KeyX'` 判定（Windows 上按住 Alt 时 `e.key` 不一定是 `x`）
+- 自动朗读补上 `scopeEl`，修复「有声音但没高亮、不滚动」
+- 增加看门狗：状态说在播、引擎说没播超过 4 秒就判定结束，避免 `playing` 卡死导致队列永不消费
+- 队列自愈：没在播且队列非空时立即播放，不再只依赖 `finish()` 一定被调用
+
+### 技术说明
+
+1.16.0 移除自动朗读，是因为靠猜类名区分「回答 / 思考」一直不稳。这次先读
+`dsh-client-ui-chat/lib/client.js`，把 DOM 契约确认下来再写：
+
+- 每行带 `data-chat-turn`；一轮 = 同号若干行
+- 回答行：过程折起时 `data-turn-process-answer`，展开时 `data-chat-flow-kind="assistant"`
+- 一轮结束时才渲染 `[data-turn-tail="N"][data-actions-reveal]`；生成中那个分支
+  **不带** `data-actions-reveal`——这才是可靠的完成信号
+
+找不到明确回答容器就跳过：宁可漏读，也不读错。
+
+配套加了两个自检入口：`__dshAutoProbe()` 看当前 DOM 能不能被正确识别，
+`__dshAutoLog` 记录每次判定（wait / ready / play / queue / preempt / finish / stop）。
+出问题先看日志，再改代码。
+
+纯函数（切句、分段、块偏移契约、回合筛选）用 `node --test` 覆盖，见 `tests/`。- （可选：为什么这么改、踩了什么坑，写给三个月后的自己和 AI 看）
+
+---
+
 ## [1.16.0] - 2026-11-20
 
 ### 变更
