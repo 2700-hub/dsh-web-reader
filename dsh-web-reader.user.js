@@ -63,6 +63,7 @@
   const LS_VOICE = 'dsh-reader.voice';
   const LS_VOL = 'dsh-reader.volume';
   const LS_LOCAL = 'dsh-reader.local';
+  const LS_AUTO = 'dsh-reader.auto';
   // 本地语音服务（tools/tts-server 启动后监听这个地址）
   const LOCAL_TTS = 'http://127.0.0.1:5050';
   const CHUNK_CHARS = 300;
@@ -75,6 +76,15 @@
     queued: 0,
     progress: 0,
     local: localStorage.getItem(LS_LOCAL) === '1',
+    // 自动朗读：只在回合结束时读明确的回答容器（见 scanAuto）
+    auto: localStorage.getItem(LS_AUTO) === '1',
+    autoSeen: new Set(),
+    autoQueue: [],
+    autoBaseline: 0,
+    autoHref: '',
+    autoInit: false,
+    autoTimer: 0,
+    draining: false,
     localReady: false,
     localAudio: null,
     localToken: 0,
@@ -111,6 +121,9 @@
     textFromBlocks,
     compareVersions,
     estimateFor,
+    uniqueTurnIds,
+    pickNewTurns,
+    shouldAutoRead,
   };
 
   /* ---------------- 文本处理 ---------------- */
@@ -217,6 +230,34 @@
     return blocks.map((b) => b.text).join('\n');
   }
 
+  /* ---------------- 自动朗读：判定逻辑（纯函数，单测覆盖） ---------------- */
+
+  // 把 data-chat-turn 的值去重、排序、丢掉非法值
+  function uniqueTurnIds(values) {
+    const seen = new Set();
+    const out = [];
+    for (const v of values || []) {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0 || seen.has(n)) continue;
+      seen.add(n);
+      out.push(n);
+    }
+    return out.sort((a, b) => a - b);
+  }
+
+  // 基线之后、还没读过的回合
+  function pickNewTurns(ids, seen, baseline) {
+    const done = new Set(seen || []);
+    const base = baseline || 0;
+    return uniqueTurnIds(ids).filter((n) => n > base && !done.has(n));
+  }
+
+  // 值不值得自动读：至少两个字，且含字母/数字/汉字（纯标点、纯空白不读）
+  function shouldAutoRead(text) {
+    const t = String(text || '').replace(/\s+/g, '');
+    return t.length >= 2 && /[\p{L}\p{N}]/u.test(t);
+  }
+
   function textOfTurn(turn) {
     const scope = scopeOfTurn(turn);
     if (!scope) return '';
@@ -227,6 +268,123 @@
       .forEach((n) => n.remove());
     return (clone.innerText || clone.textContent || '').trim();
   }
+
+  /* ---------------- 自动朗读：只认 dsh 的 data 属性，不猜类名 ---------------- */
+
+  // 一轮 = 同一个 data-chat-turn 下的若干行；回答行自己有 data-turn-process-answer
+  // （过程被折起时）或 data-chat-flow-kind="assistant"。
+  function autoRows(turn) {
+    return Array.prototype.slice.call(document.querySelectorAll('[data-chat-turn="' + turn + '"]'));
+  }
+
+  function answerElOf(turn) {
+    const rows = autoRows(turn);
+    for (const r of rows) if (r.hasAttribute('data-turn-process-answer')) return r;
+    for (const r of rows) if (r.getAttribute('data-chat-flow-kind') === 'assistant') return r;
+    return null; // 找不到明确回答容器就不读——宁可漏读，也不猜
+  }
+
+  // dsh 只在一轮结束时渲染 [data-turn-tail]，且只有结束时才带 data-actions-reveal
+  // （生成中那个分支不带）。两个一起查，避免"尾标先挂、正文还在补"。
+  function turnClosed(turn) {
+    return !!document.querySelector('[data-turn-tail="' + turn + '"][data-actions-reveal]');
+  }
+
+  function textOfEl(el) {
+    const blocks = collectBlocks(el);
+    return blocks.length ? textFromBlocks(blocks) : (el.innerText || '').trim();
+  }
+
+  function enqueueAuto(turn, text) {
+    if (state.playing) { state.autoQueue.push({ turn, text }); return; }
+    play(text, '自动朗读');
+  }
+
+  function drainAuto() {
+    if (!state.auto || !state.autoQueue.length) return;
+    const next = state.autoQueue.shift();
+    state.draining = true;
+    try { play(next.text, '自动朗读'); } finally { state.draining = false; }
+  }
+
+  function scanAuto() {
+    if (!state.auto) return;
+    const rows = document.querySelectorAll('[data-chat-turn]');
+    const ids = Array.prototype.map.call(rows, (r) => r.getAttribute('data-chat-turn'));
+    const list = uniqueTurnIds(ids);
+    // 首次扫描：页面上已有的回合都算基线，只读之后的新回复
+    if (!state.autoInit) {
+      if (!list.length) return;
+      state.autoInit = true;
+      markAutoBaseline();
+      return;
+    }
+    // 切会话后回合号从 1 重新开始：重设基线，避免把旧消息当新回复读
+    if (location.href !== state.autoHref || (list.length && list[list.length - 1] < state.autoBaseline)) {
+      markAutoBaseline();
+      return;
+    }
+    const fresh = pickNewTurns(list, state.autoSeen, state.autoBaseline);
+    for (const turn of fresh) {
+      if (!turnClosed(turn)) continue; // 还在生成，下次扫描再看
+      const el = answerElOf(turn);
+      if (!el) continue;               // 回答容器还没渲染出来，下次再看
+      const text = textOfEl(el);
+      if (!shouldAutoRead(text)) { state.autoSeen.add(turn); continue; }
+      state.autoSeen.add(turn);        // 只读一次
+      enqueueAuto(turn, text);
+    }
+  }
+
+  function markAutoBaseline() {
+    const rows = document.querySelectorAll('[data-chat-turn]');
+    const ids = uniqueTurnIds(Array.prototype.map.call(rows, (r) => r.getAttribute('data-chat-turn')));
+    state.autoBaseline = ids.length ? ids[ids.length - 1] : 0;
+    state.autoHref = location.href;
+    state.autoSeen.clear();
+    state.autoQueue.length = 0;
+  }
+
+  let autoObserver = null;
+  function startAutoWatch() {
+    if (autoObserver) return;
+    const tick = () => {
+      clearTimeout(state.autoTimer);
+      state.autoTimer = setTimeout(scanAuto, 250);
+    };
+    autoObserver = new MutationObserver(tick);
+    autoObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-chat-turn', 'data-turn-process-answer', 'data-turn-tail'],
+    });
+    setInterval(scanAuto, 1500); // 兜底：MutationObserver 漏掉时也能补上
+  }
+
+  // 控制台自检：__dshAutoProbe() 看当前 DOM 能不能被正确识别。
+  // 先跑它确认契约，再信自动朗读。
+  window.__dshAutoProbe = function () {
+    const ids = uniqueTurnIds(Array.prototype.map.call(
+      document.querySelectorAll('[data-chat-turn]'),
+      (r) => r.getAttribute('data-chat-turn'),
+    ));
+    return ids.map((id) => {
+      const answer = answerElOf(id);
+      return {
+        turn: id,
+        closed: turnClosed(id),
+        answer: answer
+          ? (answer.hasAttribute('data-turn-process-answer')
+            ? 'data-turn-process-answer'
+            : 'flow-kind=' + answer.getAttribute('data-chat-flow-kind'))
+          : null,
+        kinds: autoRows(id).map((r) => r.getAttribute('data-chat-flow-kind')),
+        seen: state.autoSeen.has(id),
+      };
+    });
+  };
+  window.__dshAutoScan = scanAuto;
 
   function docOf(node) {
     return (node && node.ownerDocument) || document;
@@ -596,6 +754,7 @@
     state.index = 0;
     state.progress = 0;
     state.queued = 0;
+    if (!state.draining) state.autoQueue.length = 0;
     state.current = null;
     state.hlCache = null;
     state.hlChunk = null;
@@ -617,6 +776,7 @@
     clearPlayHighlight();
     clearInterval(state.localTimer);
     render('朗读完成');
+    drainAuto();
   }
 
   /* ---------------- 本地语音（tools/tts-server） ---------------- */
@@ -1115,6 +1275,7 @@
         <div class="dshr-cur"></div>
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
         <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-local-cb"> 本地语音服务（云健 · 无句间停顿）</label></div>
+        <div class="dshr-row"><label class="dshr-auto"><input type="checkbox" class="dshr-auto-cb"> 自动朗读新回复（只读明确标出的回答）</label></div>
         <div class="dshr-row"><button class="dshr-start-server" style="display:none">启动本地服务</button></div>
         <div class="dshr-row"><a class="dshr-local-help" target="_blank" rel="noopener"
           href="https://github.com/2700-hub/dsh-web-reader#本地语音服务可选">本地语音服务怎么用？</a></div>
@@ -1320,6 +1481,25 @@
           }
           render();
         });
+      });
+    }
+
+    // 自动朗读开关：开启时把当前已有回合记为基线，只对之后的新回复生效
+    const autoCb = root.querySelector('.dshr-auto-cb');
+    if (autoCb) {
+      autoCb.checked = !!state.auto;
+      autoCb.addEventListener('change', () => {
+        state.auto = autoCb.checked;
+        localStorage.setItem(LS_AUTO, state.auto ? '1' : '0');
+        if (state.auto) {
+          state.autoInit = true;
+          markAutoBaseline();
+          startAutoWatch();
+          toast('已开启：新回复生成完自动朗读');
+        } else {
+          state.autoQueue.length = 0;
+          toast('已关闭自动朗读');
+        }
       });
     }
 
@@ -1751,6 +1931,7 @@
   function handleAltClick(e, doc) {
     const d = doc || document;
     if (!e.altKey) return;
+    state.autoQueue.length = 0; // 手动朗读优先，丢掉还没读的自动队列
     const win = d.defaultView || window;
     const sel = String(win.getSelection ? win.getSelection() : '').trim();
     const path = (e.composedPath && e.composedPath()) || [];
@@ -1856,6 +2037,7 @@
     const k = e.key.toLowerCase();
     if (k === 'x') {
       e.preventDefault();
+      state.autoQueue.length = 0;
       stop();
     } else if (k === 'p') {
       e.preventDefault();
@@ -1954,6 +2136,10 @@
     // 顶层监听 + 同源 iframe 监听（ThoughtDAG 画布在 iframe 里）
     attachFrames();
     setInterval(attachFrames, 2000);
+    // 自动朗读：只观察，不猜；基线等聊天列表出现后再定（见 scanAuto）
+    if (state.auto) {
+      startAutoWatch();
+    }
     console.log('[dsh-reader] v' + SCRIPT_VERSION + ' 已注入:', location.href,
       '| turns =', document.querySelectorAll(TURN_SEL).length,
       '| answers =', document.querySelectorAll(ANSWER_SEL).length,

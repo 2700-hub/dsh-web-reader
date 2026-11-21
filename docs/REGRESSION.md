@@ -118,6 +118,7 @@
 - 长文本的音质和停顿由系统语音决定
 - GitHub raw 有几分钟 CDN 缓存，更新检查可能延迟
 - `deepElementFromPoint` 最多穿透 5 层 shadow DOM
+- 自动朗读只认 `data-chat-turn` / `data-turn-process-answer` / `data-turn-tail`；dsh 改结构就会失效（失效表现是「不读」，不是「乱读」）
 
 ## M. 发版检查
 
@@ -128,9 +129,28 @@
 - [ ] **M5** `git tag -a vX.Y.Z` 并推送
 - [ ] **M6** 在真实 dsh 页面跑一遍 A1–A10
 
----
+## N. 自动朗读 v2（可选，默认关闭）
 
-## 报障包（一次性发，别一条一条问）
+先跑一次自检，确认 DOM 契约对得上：
+
+```js
+__dshAutoProbe()
+// 期望：每项 { turn, closed, answer: "data-turn-process-answer" 或 "flow-kind=assistant", kinds, seen }
+// closed 为 true 的回合才该被读；answer 为 null 的回合会被跳过（这是保护，不是 bug）
+```
+
+- [ ] **N1** 勾选「自动朗读新回复」后，发一条消息 → 生成完自动开始读
+- [ ] **N2** 生成过程中不读（`closed` 还是 false）
+- [ ] **N3** 只读回答，不读思考区
+- [ ] **N4** 同一条回复不会读第二遍
+- [ ] **N5** 正在读的时候又来一条 → 排队，不打断当前
+- [ ] **N6** 自动读期间手动 `Alt` + 点击 → 立刻切手动，丢弃队列
+- [ ] **N7** `Alt+X` 停止后，排队的自动朗读不再触发
+- [ ] **N8** 切会话不误读旧消息（`__dshAutoProbe()` 里 seen 全是 true）
+- [ ] **N9** 展开思考过程后再生成 → 宁可漏读，也不读思考
+- [ ] **N10** 关闭开关 → 不再自动读，正在读的继续读完
+
+## O. 报障包（一次性发，别一条一条问）
 
 ```
 版本：v1.16.0（面板/Console 里抄）

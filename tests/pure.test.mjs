@@ -21,7 +21,7 @@ describe('脚本加载', () => {
   it('不建面板也能加载，并挂出测试钩子', () => {
     const { api, window } = loadReader();
     assert.match(window.__dshProbe, /^v\d+\.\d+\.\d+$/);
-    for (const name of ['splitSentences', 'buildChunksFrom', 'textFromBlocks', 'compareVersions', 'estimateFor']) {
+    for (const name of ['splitSentences', 'buildChunksFrom', 'textFromBlocks', 'compareVersions', 'estimateFor', 'uniqueTurnIds', 'pickNewTurns', 'shouldAutoRead']) {
       assert.equal(typeof api[name], 'function', `缺少 ${name}`);
     }
   });
@@ -202,5 +202,31 @@ describe('estimateFor：等待时间估算', () => {
   it('字数越多，估算不减', () => {
     const { api } = loadReader();
     assert.ok(api.estimateFor(500) > api.estimateFor(100));
+  });
+});
+
+describe('自动朗读：回合筛选（纯判定）', () => {
+  it('uniqueTurnIds 去重、排序、丢掉非法值', () => {
+    const { api } = loadReader();
+    assert.deepEqual(plain(api.uniqueTurnIds(['3', '1', '3', 'x', '0', '-2', '2'])), [1, 2, 3]);
+    assert.deepEqual(plain(api.uniqueTurnIds([])), []);
+  });
+
+  it('pickNewTurns 只返回基线之后、没读过的回合', () => {
+    const { api } = loadReader();
+    assert.deepEqual(plain(api.pickNewTurns(['1', '2', '3', '4'], [3], 2)), [4]);
+    assert.deepEqual(plain(api.pickNewTurns(['1', '2'], [], 5)), []);
+    assert.deepEqual(plain(api.pickNewTurns(['1', '2', '3'], [2, 3], 0)), [1]);
+  });
+
+  it('shouldAutoRead 只认有实质内容的文本', () => {
+    const { api } = loadReader();
+    assert.equal(api.shouldAutoRead('好的'), true);
+    assert.equal(api.shouldAutoRead('ok'), true);
+    assert.equal(api.shouldAutoRead('123'), true);
+    assert.equal(api.shouldAutoRead('。。。'), false);
+    assert.equal(api.shouldAutoRead('   '), false);
+    assert.equal(api.shouldAutoRead(''), false);
+    assert.equal(api.shouldAutoRead('a'), false); // 少于两个字
   });
 });
