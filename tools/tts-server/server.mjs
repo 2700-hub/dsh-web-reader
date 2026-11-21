@@ -72,6 +72,9 @@ async function ensureEngine(priority) {
 
 function resetEngine(priority) {
   const p = priority === 'high' ? 'high' : 'low';
+  try {
+    if (engines[p] && typeof engines[p].close === 'function') engines[p].close();
+  } catch (err) { /* 忽略 */ }
   engines[p] = null;
   engineReady[p] = null;
 }
@@ -182,7 +185,10 @@ const server = http.createServer(async (req, res) => {
       console.log(`[tts] ${text.slice(0, 18)}… ${r.buffer.length} bytes${r.cached ? ' (缓存)' : ''}`);
     } catch (err) {
       console.error('[tts] 失败:', (err && (err.stack || err.message)) || String(err));
-      try { res.end(); } catch (e) { /* 忽略 */ }
+      try {
+        if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end('tts failed');
+      } catch (e) { /* 忽略 */ }
     }
     return;
   }
@@ -209,6 +215,15 @@ const server = http.createServer(async (req, res) => {
   }
 
   res.writeHead(404); res.end('not found');
+});
+
+server.on('error', (err) => {
+  if (err && err.code === 'EADDRINUSE') {
+    console.error(`端口 ${PORT} 已被占用。换个端口再启动，例如：`);
+    console.error('  set DSH_TTS_PORT=5051 && node server.mjs');
+    process.exit(1);
+  }
+  throw err;
 });
 
 server.listen(PORT, '127.0.0.1', () => {

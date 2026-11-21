@@ -874,8 +874,25 @@
     setLoading(false);
   }
 
+  // 本地服务不可用时，不要静默停：关掉本地开关，从当前段开始用系统语音接着读。
+  // 这样本地服务只是"增强"，坏了也不影响主功能。
+  function localFallback(reason) {
+    clearInterval(state.localTimer);
+    localStop();
+    state.local = false;
+    state.localReady = false;
+    try { localStorage.setItem(LS_LOCAL, '0'); } catch (err) { /* 忽略 */ }
+    const cb = document.querySelector('.dshr-local-cb');
+    if (cb) cb.checked = false;
+    toast(reason || '本地语音不可用，已切回系统语音');
+    const cur = state.chunks[state.index];
+    state.gen += 1;
+    startFrom(cur ? cur.from : 0);
+  }
+
   // 预取：把接下来几段的音频先取下来（blob），播的时候就不用等网络
   function localPrefetch(from) {
+    const token = state.localToken;
     for (let k = from; k < Math.min(from + 2, state.chunks.length); k += 1) {
       if (state.localUrls.has(k)) continue;
       const chunk = state.chunks[k];
@@ -887,12 +904,18 @@
         })
         .then((b) => {
           const u = URL.createObjectURL(b);
+          // 预取回来时如果已经换了一批（停止/重排），直接释放，别留在 map 里
+          if (token !== state.localToken) {
+            try { URL.revokeObjectURL(u); } catch (err) { /* 忽略 */ }
+            return null;
+          }
           state.localUrls.set(k, u);
           return u;
         })
-        .catch((err) => {
+        .catch(() => {
+          // 预取失败不算错：播放时会再实时取一次。不要 rethrow，否则是未处理的 rejection。
           state.localUrls.delete(k);
-          throw err;
+          return null;
         });
       state.localUrls.set(k, p); // 先占位，避免同一段重复请求
     }
@@ -971,9 +994,7 @@
     };
     audio.onerror = () => {
       if (token !== state.localToken) return;
-      toast('本地语音播放失败');
-      state.playing = false;
-      render();
+      localFallback('本地语音播放失败，已切回系统语音');
     };
     // 时间戳可能比音频晚一点写入服务端缓存，空结果时重试几次
     const loadTimings = (attempt) => {
@@ -993,11 +1014,9 @@
       setLoading(false);
       if (!state.localTimings.has(c)) loadTimings(2);
     });
-    audio.play().catch((err) => {
+    audio.play().catch(() => {
       if (token !== state.localToken) return;
-      state.playing = false;
-      toast('播放被拦截：' + (err && err.message ? err.message : err));
-      render();
+      localFallback('本地语音播放被拦截，已切回系统语音');
     });
     // 下一段延后预取：先让当前段出声，避免抢走连接
     setTimeout(() => { if (token === state.localToken) localPrefetch(c + 1); }, 600);
