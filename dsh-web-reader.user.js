@@ -84,6 +84,7 @@
     autoHref: '',
     autoInit: false,
     autoTimer: 0,
+    lastSpeakAt: 0,
     draining: false,
     localReady: false,
     localAudio: null,
@@ -296,19 +297,44 @@
   }
 
   function enqueueAuto(turn, text) {
-    if (state.playing) { state.autoQueue.push({ turn, text }); return; }
+    if (state.playing) {
+      state.autoQueue.push({ turn, text });
+      autoLog('queue', { turn, queue: state.autoQueue.length });
+      return;
+    }
+    autoLog('play', { turn, textLen: text.length });
     play(text, '自动朗读');
   }
 
   function drainAuto() {
     if (!state.auto || !state.autoQueue.length) return;
     const next = state.autoQueue.shift();
+    autoLog('drain', { turn: next.turn, left: state.autoQueue.length });
     state.draining = true;
     try { play(next.text, '自动朗读'); } finally { state.draining = false; }
   }
 
+  // 决策日志：控制台 __dshAutoLog 看最近 50 条，用来回答"它为什么没读"
+  window.__dshAutoLog = [];
+  function autoLog(event, data) {
+    const entry = Object.assign({ at: new Date().toISOString().slice(11, 19), event }, data || {});
+    window.__dshAutoLog.push(entry);
+    if (window.__dshAutoLog.length > 50) window.__dshAutoLog.shift();
+  }
+
+  // 状态说在播、引擎却说没在播 → 认为已经结束，把卡住的队列放出来。
+  // 2 秒保护期，避免 speak 刚调用、speaking 还没置位的窗口误判。
+  function autoWatchdog() {
+    if (!state.auto || !state.playing || state.paused || state.local) return;
+    if (Date.now() - (state.lastSpeakAt || 0) < 4000) return;
+    if (synth.speaking || synth.pending) return;
+    autoLog('stuck-finish', { queue: state.autoQueue.length });
+    finish();
+  }
+
   function scanAuto() {
     if (!state.auto) return;
+    autoWatchdog();
     const rows = document.querySelectorAll('[data-chat-turn]');
     const ids = Array.prototype.map.call(rows, (r) => r.getAttribute('data-chat-turn'));
     const list = uniqueTurnIds(ids);
@@ -326,14 +352,23 @@
     }
     const fresh = pickNewTurns(list, state.autoSeen, state.autoBaseline);
     for (const turn of fresh) {
-      if (!turnClosed(turn)) continue; // 还在生成，下次扫描再看
+      if (!turnClosed(turn)) {
+        autoLog('wait', { turn, playing: state.playing });
+        continue; // 还在生成，下次扫描再看
+      }
       const el = answerElOf(turn);
-      if (!el) continue;               // 回答容器还没渲染出来，下次再看
+      if (!el) {
+        autoLog('no-answer', { turn });
+        continue; // 回答容器还没渲染出来，下次再看
+      }
       const text = textOfEl(el);
-      if (!shouldAutoRead(text)) { state.autoSeen.add(turn); continue; }
-      state.autoSeen.add(turn);        // 只读一次
+      autoLog('ready', { turn, textLen: text.length, playing: state.playing, queue: state.autoQueue.length });
+      if (!shouldAutoRead(text)) { state.autoSeen.add(turn); autoLog('skip-empty', { turn }); continue; }
+      state.autoSeen.add(turn); // 只读一次
       enqueueAuto(turn, text);
     }
+    // 自愈：没有在播、队列里还有东西 → 立即放出来（不依赖 finish 一定被调用）
+    if (!state.playing && state.autoQueue.length) drainAuto();
   }
 
   function markAutoBaseline() {
@@ -732,6 +767,7 @@
       u.rate = 2;
       const v = pickVoice();
       if (v) u.voice = v;
+      state.lastSpeakAt = Date.now();
       synth.speak(u);
     } catch (err) { /* 忽略 */ }
   }
@@ -776,6 +812,7 @@
     clearPlayHighlight();
     clearInterval(state.localTimer);
     render('朗读完成');
+    autoLog('finish', { queue: state.autoQueue.length });
     drainAuto();
   }
 
@@ -1677,6 +1714,7 @@
       u.volume = state.volume;
       const v = pickVoice();
       if (v) u.voice = v;
+      state.lastSpeakAt = Date.now();
       synth.speak(u);
     }
 
