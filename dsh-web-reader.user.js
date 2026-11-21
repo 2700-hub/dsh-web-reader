@@ -85,6 +85,7 @@
     autoInit: false,
     autoTimer: 0,
     autoListEl: null,
+    autoSession: '',
     autoWaitLogged: new Set(),
     lastSpeakAt: 0,
     draining: false,
@@ -363,24 +364,24 @@
     const rows = document.querySelectorAll('[data-chat-turn]');
     const ids = Array.prototype.map.call(rows, (r) => r.getAttribute('data-chat-turn'));
     const list = uniqueTurnIds(ids);
+    const sessionEl = document.querySelector('[data-conversation-session]');
+    const sessionId = sessionEl ? (sessionEl.getAttribute('data-conversation-session') || '') : '';
     // 首次扫描：页面上已有的回合都算基线，只读之后的新回复
     if (!state.autoInit) {
       if (!list.length) return;
       state.autoInit = true;
+      state.autoSession = sessionId;
       markAutoBaseline();
-      state.autoListEl = rows[0].parentElement;
       return;
     }
-    // 换会话最可靠的信号：聊天列表容器被整块换掉（旧容器不再 connected）。
-    // 比 URL / 回合号稳，往下翻页加载旧消息时也不会误判。
-    const container = rows.length ? rows[0].parentElement : null;
-    if (state.autoListEl && container && container !== state.autoListEl && !state.autoListEl.isConnected) {
-      autoLog('new-session', {});
-      state.autoListEl = container;
+    // 换会话：dsh 把 sessionId 写在 [data-conversation-session] 上，直接比它
+    if (sessionId && state.autoSession && sessionId !== state.autoSession) {
+      autoLog('new-session', { to: sessionId.slice(0, 8) });
+      state.autoSession = sessionId;
       resetForNewSession();
       return;
     }
-    if (container) state.autoListEl = container;
+    if (sessionId && !state.autoSession) state.autoSession = sessionId;
     // 兜底：URL 变了，或回合号整体回退
     if (location.href !== state.autoHref || (list.length && list[list.length - 1] < state.autoBaseline)) {
       resetForNewSession();
