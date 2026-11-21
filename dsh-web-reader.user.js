@@ -298,7 +298,7 @@
     return blocks.length ? textFromBlocks(blocks) : (el.innerText || '').trim();
   }
 
-  function enqueueAuto(turn, text) {
+  function enqueueAuto(turn, text, el) {
     if (state.playing) {
       // 正在自动朗读上一条 → 直接抢占，读最新的；
       // 正在手动朗读（你 Alt+ 点的）→ 排队，别打断你。
@@ -306,11 +306,14 @@
         autoLog('preempt', { turn });
         stop();
       } else {
-        state.autoQueue.push({ turn, text });
+        state.autoQueue.push({ turn, text, el });
         autoLog('queue', { turn, queue: state.autoQueue.length });
         return;
       }
     }
+    // 高亮和自动滚动都挂在 scopeEl 上：手动朗读会设，自动朗读也必须设，否则没有高亮
+    state.scopeEl = el || null;
+    state.hlCache = null;
     autoLog('play', { turn, textLen: text.length });
     play(text, '自动朗读', 'auto');
   }
@@ -319,6 +322,8 @@
     if (!state.auto || !state.autoQueue.length) return;
     const next = state.autoQueue.shift();
     autoLog('drain', { turn: next.turn, left: state.autoQueue.length });
+    state.scopeEl = next.el || null;
+    state.hlCache = null;
     state.draining = true;
     try { play(next.text, '自动朗读', 'auto'); } finally { state.draining = false; }
   }
@@ -379,7 +384,7 @@
       autoLog('ready', { turn, textLen: text.length, playing: state.playing, queue: state.autoQueue.length });
       if (!shouldAutoRead(text)) { state.autoSeen.add(turn); autoLog('skip-empty', { turn }); continue; }
       state.autoSeen.add(turn); // 只读一次
-      enqueueAuto(turn, text);
+      enqueueAuto(turn, text, el);
     }
     // 自愈：没有在播、队列里还有东西 → 立即放出来（不依赖 finish 一定被调用）
     if (!state.playing && state.autoQueue.length) drainAuto();
