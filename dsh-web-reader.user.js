@@ -84,6 +84,7 @@
     autoHref: '',
     autoInit: false,
     autoTimer: 0,
+    autoListEl: null,
     autoWaitLogged: new Set(),
     lastSpeakAt: 0,
     draining: false,
@@ -346,6 +347,16 @@
     finish();
   }
 
+  // 切会话：停掉旧的自动朗读、清空队列、重设基线。
+  // 手动朗读不动——那是用户自己点的，让他听完。
+  function resetForNewSession() {
+    if (state.playing && state.playKind === 'auto') {
+      autoLog('session-reset', { queue: state.autoQueue.length });
+      stop();
+    }
+    markAutoBaseline();
+  }
+
   function scanAuto() {
     if (!state.auto) return;
     autoWatchdog();
@@ -357,11 +368,22 @@
       if (!list.length) return;
       state.autoInit = true;
       markAutoBaseline();
+      state.autoListEl = rows[0].parentElement;
       return;
     }
-    // 切会话后回合号从 1 重新开始：重设基线，避免把旧消息当新回复读
+    // 换会话最可靠的信号：聊天列表容器被整块换掉（旧容器不再 connected）。
+    // 比 URL / 回合号稳，往下翻页加载旧消息时也不会误判。
+    const container = rows.length ? rows[0].parentElement : null;
+    if (state.autoListEl && container && container !== state.autoListEl && !state.autoListEl.isConnected) {
+      autoLog('new-session', {});
+      state.autoListEl = container;
+      resetForNewSession();
+      return;
+    }
+    if (container) state.autoListEl = container;
+    // 兜底：URL 变了，或回合号整体回退
     if (location.href !== state.autoHref || (list.length && list[list.length - 1] < state.autoBaseline)) {
-      markAutoBaseline();
+      resetForNewSession();
       return;
     }
     const fresh = pickNewTurns(list, state.autoSeen, state.autoBaseline);
