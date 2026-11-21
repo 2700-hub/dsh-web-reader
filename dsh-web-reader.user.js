@@ -84,6 +84,7 @@
     autoHref: '',
     autoInit: false,
     autoTimer: 0,
+    autoWaitLogged: new Set(),
     lastSpeakAt: 0,
     draining: false,
     localReady: false,
@@ -353,9 +354,14 @@
     const fresh = pickNewTurns(list, state.autoSeen, state.autoBaseline);
     for (const turn of fresh) {
       if (!turnClosed(turn)) {
-        autoLog('wait', { turn, playing: state.playing });
+        // 每个回合只记一次 wait，别把日志刷满
+        if (!state.autoWaitLogged.has(turn)) {
+          state.autoWaitLogged.add(turn);
+          autoLog('wait', { turn, playing: state.playing });
+        }
         continue; // 还在生成，下次扫描再看
       }
+      state.autoWaitLogged.delete(turn);
       const el = answerElOf(turn);
       if (!el) {
         autoLog('no-answer', { turn });
@@ -1548,6 +1554,7 @@
     const btnStop = root.querySelector('[data-act="stop"]');
     if (btnStop) {
       btnStop.addEventListener('click', () => {
+        autoLog('btn-stop', {});
         state.autoQueue.length = 0;
         stop();
       });
@@ -2089,10 +2096,12 @@
     const is = (letter) => code === 'Key' + letter.toUpperCase() || k === letter;
     if (is('x')) {
       e.preventDefault();
+      autoLog('key', { code, key: k, action: 'stop' });
       state.autoQueue.length = 0;
       stop();
     } else if (is('p')) {
       e.preventDefault();
+      autoLog('key', { code, key: k, action: 'panel' });
       togglePanel();
     }
   }
