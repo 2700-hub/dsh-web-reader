@@ -98,6 +98,7 @@
     voiceName: localStorage.getItem(LS_VOICE) || '',
     volume: Number(localStorage.getItem(LS_VOL) ?? 1),
     playing: false,
+    playKind: '',
     paused: false,
     pausedAt: 0,
     warned: false,
@@ -299,12 +300,19 @@
 
   function enqueueAuto(turn, text) {
     if (state.playing) {
-      state.autoQueue.push({ turn, text });
-      autoLog('queue', { turn, queue: state.autoQueue.length });
-      return;
+      // 正在自动朗读上一条 → 直接抢占，读最新的；
+      // 正在手动朗读（你 Alt+ 点的）→ 排队，别打断你。
+      if (state.playKind === 'auto') {
+        autoLog('preempt', { turn });
+        stop();
+      } else {
+        state.autoQueue.push({ turn, text });
+        autoLog('queue', { turn, queue: state.autoQueue.length });
+        return;
+      }
     }
     autoLog('play', { turn, textLen: text.length });
-    play(text, '自动朗读');
+    play(text, '自动朗读', 'auto');
   }
 
   function drainAuto() {
@@ -312,7 +320,7 @@
     const next = state.autoQueue.shift();
     autoLog('drain', { turn: next.turn, left: state.autoQueue.length });
     state.draining = true;
-    try { play(next.text, '自动朗读'); } finally { state.draining = false; }
+    try { play(next.text, '自动朗读', 'auto'); } finally { state.draining = false; }
   }
 
   // 决策日志：控制台 __dshAutoLog 看最近 50 条，用来回答"它为什么没读"
@@ -1153,7 +1161,8 @@
     startFrom(idx);
   }
 
-  function play(text, label) {
+  function play(text, label, kind) {
+    state.playKind = kind || 'manual';
     playTextFrom(text, 0, label);
   }
 
@@ -1987,6 +1996,7 @@
   function handleAltClick(e, doc) {
     const d = doc || document;
     if (!e.altKey) return;
+    state.playKind = 'manual';
     state.autoQueue.length = 0; // 手动朗读优先，丢掉还没读的自动队列
     const win = d.defaultView || window;
     const sel = String(win.getSelection ? win.getSelection() : '').trim();
