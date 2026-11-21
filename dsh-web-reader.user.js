@@ -302,16 +302,10 @@
 
   function enqueueAuto(turn, text, el) {
     if (state.playing) {
-      // 正在自动朗读上一条 → 直接抢占，读最新的；
-      // 正在手动朗读（你 Alt+ 点的）→ 排队，别打断你。
-      if (state.playKind === 'auto') {
-        autoLog('preempt', { turn });
-        stop();
-      } else {
-        state.autoQueue.push({ turn, text, el });
-        autoLog('queue', { turn, queue: state.autoQueue.length });
-        return;
-      }
+      // 新回复总是抢占：自动模式就是"追最新"。
+      // 想安静听完一条手动朗读，先把自动朗读关掉。
+      autoLog('preempt', { turn, kind: state.playKind });
+      stop();
     }
     // 高亮和自动滚动都挂在 scopeEl 上：手动朗读会设，自动朗读也必须设，否则没有高亮
     state.scopeEl = el || null;
@@ -1159,6 +1153,7 @@
 
   // 从某个字符偏移处对应的句子开始读
   function playTextFrom(text, offset, label) {
+    if (state.playKind === 'manual') autoLog('manual-play', { textLen: String(text || '').length });
     stop();
     state.sentences = splitSentences(text);
     if (!state.sentences.length) {
