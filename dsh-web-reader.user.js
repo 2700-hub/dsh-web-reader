@@ -1515,6 +1515,7 @@
         <button class="dshr-close" title="关闭面板（Alt+P 找回）">×</button>
       </div>
       <div class="dshr-bar" title="拖动或点击，从对应句子开始读"><i></i></div>
+      <div class="dshr-row"><button class="dshr-resume" style="display:none">继续上次朗读</button></div>
       <div class="dshr-loading">
         <svg viewBox="0 0 20 20" width="14" height="14"><circle class="dshr-ring-track" cx="10" cy="10" r="8"></circle><circle class="dshr-ring" cx="10" cy="10" r="8"></circle></svg>
         <span class="dshr-loading-text">正在合成…</span>
@@ -1526,7 +1527,6 @@
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
         <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-local-cb"> 本地语音服务（云健 · 无句间停顿）</label></div>
         <div class="dshr-row"><label class="dshr-auto"><input type="checkbox" class="dshr-auto-cb"> 自动朗读新回复（只读明确标出的回答）</label></div>
-        <div class="dshr-row"><button class="dshr-resume" style="display:none">继续上次朗读</button></div>
         <div class="dshr-row"><button class="dshr-start-server" style="display:none">启动本地服务</button></div>
         <div class="dshr-row"><a class="dshr-local-help" target="_blank" rel="noopener"
           href="https://github.com/2700-hub/dsh-web-reader#本地语音服务可选">本地语音服务怎么用？</a></div>
