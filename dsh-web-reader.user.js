@@ -444,6 +444,16 @@
   };
   window.__dshAutoScan = scanAuto;
 
+  // INV1 的探针：任何时刻 synth 和 local 至多一个为 true
+  window.__dshSources = function () {
+    return {
+      synth: !!(synth.speaking || synth.pending),
+      local: !!state.localAudio,
+      playing: state.playing,
+      kind: state.playKind,
+    };
+  };
+
   function docOf(node) {
     return (node && node.ownerDocument) || document;
   }
@@ -1030,6 +1040,11 @@
 
   // 一段一个音频：当前段播的时候，后两段已经在本地备好
   function localPlay(c) {
+    // INV1：开始本地音频前，先确保系统语音不在响（两个引擎互斥）
+    if (synth.speaking || synth.pending) {
+      state.gen += 1;
+      synth.cancel();
+    }
     const token = ++state.localToken;
     localStop();
     state.localToken = token;
@@ -1135,6 +1150,8 @@
       return;
     }
     const idx = Math.max(0, Math.min(sentenceIndex, state.sentences.length - 1));
+    // INV1：开始系统语音前，先确保本地音频不在响（两个引擎互斥）
+    localStop();
     // 只有真的在播时才需要先取消；空闲时 cancel() 反而会让引擎重新初始化，拖慢开口
     const wasActive = state.playing || synth.speaking || synth.pending;
     if (wasActive) synth.cancel();
