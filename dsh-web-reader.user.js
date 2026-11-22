@@ -1478,6 +1478,7 @@
         border: 1px solid rgba(107,138,253,.6); border-radius: 8px; padding: 4px 6px;
         background: rgba(107,138,253,.12); }
       #dsh-reader .dshr-start-server:hover { background: rgba(107,138,253,.24); }
+      #dsh-reader .dshr-tools button { flex: 1; font-size: 11px; padding: 4px 4px; }
       #dsh-reader .dshr-resume { flex: 1; cursor: pointer; font: inherit; color: #a9c0ff;
         border: 1px solid rgba(107,138,253,.6); border-radius: 8px; padding: 4px 6px;
         background: rgba(107,138,253,.12); }
@@ -1505,9 +1506,6 @@
     root.innerHTML = `
       <div class="dshr-row dshr-head" title="拖动可移动面板，双击复位">
         <span class="dshr-title"><span class="dshr-ico">🔊</span><span class="dshr-label"> 朗读</span></span>
-        <button data-act="update" title="检查更新">⟳</button>
-        <button data-act="rate" title="语速">⚡</button>
-        <button data-act="vol" title="音量">🔉</button>
         <button data-act="pause" title="暂停 / 继续">⏸</button>
         <button data-act="replay" title="从头重读这条（Alt+R）">🔁</button>
         <button data-act="stop" title="停止（Alt+X）">⏹</button>
@@ -1532,6 +1530,11 @@
           href="https://github.com/2700-hub/dsh-web-reader#本地语音服务可选">本地语音服务怎么用？</a></div>
         <div class="dshr-row"><a class="dshr-update-link" target="_blank" rel="noopener" style="display:none">安装新版</a></div>
         <div class="dshr-row"><select class="dshr-voice"></select></div>
+        <div class="dshr-row dshr-tools">
+          <button data-act="rate" title="语速">⚡ 语速</button>
+          <button data-act="vol" title="音量">🔉 音量</button>
+          <button data-act="update" title="检查更新">⟳ 更新</button>
+        </div>
         <div class="dshr-kbd">Alt+点击正文从该句读 · Alt+R 重读这条 · Alt+X 停止 · Alt+P 面板</div>
       </div>
       <div class="dshr-pop" data-pop="rate">
@@ -1968,8 +1971,8 @@
       previewVoice();
     });
 
-    // 标题栏的语速 / 音量按钮：点开对应的弹出条
-    root.querySelectorAll('.dshr-head button[data-act]').forEach((btn) => {
+    // 语速 / 音量按钮（现在在设置区）：点开对应的弹出条
+    root.querySelectorAll('[data-act="rate"], [data-act="vol"]').forEach((btn) => {
       btn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const name = btn.dataset.act;
