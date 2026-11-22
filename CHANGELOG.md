@@ -31,6 +31,35 @@ git push --follow-tags origin main
 
 ---
 
+## [1.17.1] - 2026-11-22
+
+### 变更
+
+- 重构：删掉自动朗读队列遗留的死代码（`autoQueue` / `drainAuto` / `draining`，净减 21 行）
+- 重构：两个音频引擎（系统语音 / 本地音频）的入口互斥，INV1 从"靠调用方记得 stop"变成"入口自己保证"
+- 新增探针 `__dshSources()`，返回两个引擎当前是否在响
+- 新增 `docs/SYSTEM-MODEL.md`（系统模型模板）与 `docs/SYSTEM-MODEL.solved.md`（参考答案）
+- `docs/REGRESSION.md` 顶部新增「不变量」一节（INV1–INV5）
+
+### 修复
+
+- 无（本次是重构，行为不变）
+
+### 技术说明
+
+1.17.0 为了"新回复抢占"把队列改成无条件抢占，但队列的写入点没删干净，
+`autoQueue` 从此只被清空、从不入队——`drainAuto` 和自愈逻辑都在空转。
+判断方法：`grep autoQueue.push`，搜不到就是死代码。
+
+引擎互斥不是加抽象，而是把"保证"放进唯一入口：
+`startFrom()` 开头先 `localStop()`，`localPlay()` 开头先 `synth.cancel()`。
+这样 INV1 不再依赖每个调用点都记得先 stop。
+
+验证方式：播放中跑 `__dshSources()`，`synth` 和 `local` 任何时刻至多一个为真；
+本地服务被杀、回退系统语音的交接瞬间也不能两个都为真。
+
+---
+
 ## [1.17.0] - 2026-11-21
 
 ### 变更
