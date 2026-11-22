@@ -855,7 +855,7 @@
       synth.cancel();
       autoLog('stop', {});
     }
-    render();
+    render('就绪 · Alt+点击任意消息朗读');
   }
 
   function finish() {
@@ -1876,8 +1876,9 @@
   function render(msg) {
     if (!root) return;
     const total = state.sentences.length || 0;
-    const chunkFrom = state.chunks[state.index] ? state.chunks[state.index].from : (state.playing ? 0 : total);
-    // 朗读中用段内进度（逐字推进），停下时才回落到段落起点
+    const chunkFrom = state.chunks[state.index] ? state.chunks[state.index].from : (state.playing ? 0 : (state.progress || 0));
+    // 朗读中用段内进度（逐字推进）；停下时回落到段落起点。
+    // 注意别回落成 total：那会把"停止"显示成"朗读完成"、进度条拉满。
     const done = state.playing ? Math.min(total, Math.max(0, state.progress || 0)) : chunkFrom;
     const shown = total ? Math.min(total, Math.floor(done) + 1) : 0;
 
