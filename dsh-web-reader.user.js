@@ -1429,7 +1429,7 @@
         <button data-act="rate" title="语速">⚡</button>
         <button data-act="vol" title="音量">🔉</button>
         <button data-act="pause" title="暂停 / 继续">⏸</button>
-        <button data-act="replay" title="重读当前句（Alt+R）">↻</button>
+        <button data-act="replay" title="重读当前句（Alt+R）">🔁</button>
         <button data-act="stop" title="停止（Alt+X）">⏹</button>
         <button class="dshr-min" title="收起/展开">–</button>
         <button class="dshr-close" title="关闭面板（Alt+P 找回）">×</button>
