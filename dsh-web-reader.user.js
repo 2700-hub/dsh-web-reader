@@ -87,6 +87,7 @@
     autoTimer: 0,
     autoListEl: null,
     autoSession: '',
+    resume: null,
     autoWaitLogged: new Set(),
     lastSpeakAt: 0,
     localReady: false,
@@ -332,11 +333,66 @@
     finish();
   }
 
+  // F5：切走前记住"读到哪"，回到同一会话时提供续读
+  function saveResume() {
+    const scope = state.scopeEl;
+    const turnEl = scope && scope.closest ? scope.closest('[data-chat-turn]') : null;
+    const turnId = turnEl ? Number(turnEl.getAttribute('data-chat-turn')) : 0;
+    if (!turnId || !state.sentences.length) return;
+    state.resume = {
+      session: state.autoSession || '',
+      turn: turnId,
+      index: Math.max(0, Math.min(state.sentences.length - 1, Math.floor(state.progress || 0))),
+      sentences: state.sentences.slice(),
+    };
+  }
+
+  function updateResumeUI() {
+    if (!root) return;
+    const btn = root.querySelector('.dshr-resume');
+    if (!btn) return;
+    const r = state.resume;
+    if (r && r.session && r.session === state.autoSession) {
+      btn.style.display = '';
+      btn.textContent = '继续上次朗读（第 ' + (r.index + 1) + ' 句）';
+    } else {
+      btn.style.display = 'none';
+    }
+  }
+
+  function resumeLast() {
+    const r = state.resume;
+    if (!r) { toast('没有可续读的内容'); return; }
+    const el = answerElOf(r.turn);
+    if (!el) {
+      toast('找不到上次的内容，可能已被清理');
+      state.resume = null;
+      updateResumeUI();
+      return;
+    }
+    state.scopeEl = el;
+    state.hlCache = null;
+    state.sentences = r.sentences.slice();
+    const idx = Math.max(0, Math.min(r.index, r.sentences.length - 1));
+    if (state.local && state.localReady) {
+      stop();
+      state.chunks = localBuildChunks(idx);
+      state.queued = 0;
+      localPlay(0);
+    } else {
+      startFrom(idx);
+    }
+    state.resume = null;
+    updateResumeUI();
+    toast('从第 ' + (idx + 1) + ' 句继续');
+  }
+
   // 切会话：一律停掉朗读——内容已经不在当前会话里了，继续读只会对着空白念。
   // 以前对手动朗读放行，结果暂停状态跨会话存活、高亮卡在已删除节点上（B1）。
   function resetForNewSession() {
     const wasActive = state.playing || synth.speaking || synth.pending;
     if (wasActive) {
+      saveResume();
       autoLog('session-reset', { kind: state.playKind });
       stop();
       toast('会话已切换，朗读已停止');
@@ -344,6 +400,7 @@
     state.scopeEl = null;
     clearPlayHighlight();
     markAutoBaseline();
+    updateResumeUI();
   }
 
   function scanAuto() {
@@ -407,9 +464,25 @@
     state.autoSeen.clear();
   }
 
+  // 会话监听：每 800ms 比对一次 session id。独立于自动朗读——
+  // "切会话要停朗读"（B1）和"记住读到哪"（F5）在自动关着时也要成立。
+  let sessionWatchTimer = 0;
+  function startSessionWatch() {
+    if (sessionWatchTimer) return;
+    sessionWatchTimer = setInterval(() => {
+      const sEl = document.querySelector('[data-conversation-session]');
+      const id = sEl ? (sEl.getAttribute('data-conversation-session') || '') : '';
+      if (!id) return;
+      if (!state.autoSession) { state.autoSession = id; return; }
+      if (id !== state.autoSession) {
+        state.autoSession = id;
+        resetForNewSession();
+      }
+    }, 800);
+  }
+
   let autoObserver = null;
-  function startAutoWatch() {
-    if (autoObserver) return;
+  function startAutoWatch() {    if (autoObserver) return;
     const tick = () => {
       clearTimeout(state.autoTimer);
       state.autoTimer = setTimeout(scanAuto, 250);
@@ -1399,6 +1472,10 @@
         border: 1px solid rgba(107,138,253,.6); border-radius: 8px; padding: 4px 6px;
         background: rgba(107,138,253,.12); }
       #dsh-reader .dshr-start-server:hover { background: rgba(107,138,253,.24); }
+      #dsh-reader .dshr-resume { flex: 1; cursor: pointer; font: inherit; color: #a9c0ff;
+        border: 1px solid rgba(107,138,253,.6); border-radius: 8px; padding: 4px 6px;
+        background: rgba(107,138,253,.12); }
+      #dsh-reader .dshr-resume:hover { background: rgba(107,138,253,.24); }
       #dsh-reader .dshr-local-help { color: #8fa6d8; font-size: 11px; text-decoration: underline; opacity: .85; }
       #dsh-reader .dshr-kbd { opacity: .55; font-size: 11px; margin-top: 6px; }
       #dsh-reader .dshr-pop { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px);
@@ -1443,6 +1520,7 @@
         <div class="dshr-voicebadge">当前音色：<b class="dshr-voice-name">-</b></div>
         <div class="dshr-row"><label class="dshr-local"><input type="checkbox" class="dshr-local-cb"> 本地语音服务（云健 · 无句间停顿）</label></div>
         <div class="dshr-row"><label class="dshr-auto"><input type="checkbox" class="dshr-auto-cb"> 自动朗读新回复（只读明确标出的回答）</label></div>
+        <div class="dshr-row"><button class="dshr-resume" style="display:none">继续上次朗读</button></div>
         <div class="dshr-row"><button class="dshr-start-server" style="display:none">启动本地服务</button></div>
         <div class="dshr-row"><a class="dshr-local-help" target="_blank" rel="noopener"
           href="https://github.com/2700-hub/dsh-web-reader#本地语音服务可选">本地语音服务怎么用？</a></div>
@@ -1677,6 +1755,8 @@
         replayCurrent();
       });
     }
+    const btnResume = root.querySelector('.dshr-resume');
+    if (btnResume) btnResume.addEventListener('click', resumeLast);
     const btnStop = root.querySelector('[data-act="stop"]');
     if (btnStop) {
       btnStop.addEventListener('click', () => {
@@ -2114,6 +2194,8 @@
     const d = doc || document;
     if (!e.altKey) return;
     state.playKind = 'manual';
+    state.resume = null; // 手动点了新内容，之前的续读作废
+    updateResumeUI();
     const win = d.defaultView || window;
     const sel = String(win.getSelection ? win.getSelection() : '').trim();
     const path = (e.composedPath && e.composedPath()) || [];
@@ -2326,6 +2408,8 @@
     // 顶层监听 + 同源 iframe 监听（ThoughtDAG 画布在 iframe 里）
     attachFrames();
     setInterval(attachFrames, 2000);
+    // 会话监听独立于自动朗读：自动关着也要能发现切会话（B1）并保留续读位置（F5）
+    startSessionWatch();
     // 自动朗读：只观察，不猜；基线等聊天列表出现后再定（见 scanAuto）
     if (state.auto) {
       startAutoWatch();
