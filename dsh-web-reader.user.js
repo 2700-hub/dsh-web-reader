@@ -335,6 +335,7 @@
 
   // F5：切走前记住"读到哪"，回到同一会话时提供续读
   function saveResume() {
+    if (!state.playing) return;
     const scope = state.scopeEl;
     const turnEl = scope && scope.closest ? scope.closest('[data-chat-turn]') : null;
     const turnId = turnEl ? Number(turnEl.getAttribute('data-chat-turn')) : 0;
@@ -392,7 +393,6 @@
   function resetForNewSession() {
     const wasActive = state.playing || synth.speaking || synth.pending;
     if (wasActive) {
-      saveResume();
       autoLog('session-reset', { kind: state.playKind });
       stop();
       toast('会话已切换，朗读已停止');
@@ -401,6 +401,14 @@
     clearPlayHighlight();
     markAutoBaseline();
     updateResumeUI();
+  }
+
+  // 唯一的换会话入口：先用【旧】会话号保存续读位置，再切到新会话。
+  // 顺序反了的话，续读会被记到新会话名下，切回来就对不上了。
+  function onSessionChange(newId) {
+    saveResume();
+    state.autoSession = newId;
+    resetForNewSession();
   }
 
   function scanAuto() {
@@ -422,8 +430,7 @@
     // 换会话：dsh 把 sessionId 写在 [data-conversation-session] 上，直接比它
     if (sessionId && state.autoSession && sessionId !== state.autoSession) {
       autoLog('new-session', { to: sessionId.slice(0, 8) });
-      state.autoSession = sessionId;
-      resetForNewSession();
+      onSessionChange(sessionId);
       return;
     }
     if (sessionId && !state.autoSession) state.autoSession = sessionId;
@@ -475,8 +482,7 @@
       if (!id) return;
       if (!state.autoSession) { state.autoSession = id; return; }
       if (id !== state.autoSession) {
-        state.autoSession = id;
-        resetForNewSession();
+        onSessionChange(id);
       }
     }, 800);
   }
