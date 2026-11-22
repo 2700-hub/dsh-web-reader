@@ -454,6 +454,25 @@
     };
   };
 
+  // B1/B2 的探针（只读）：高亮还连不连着、两个引擎在不在响、读到第几句
+  window.__dshHlProbe = function () {
+    const sEl = document.querySelector('[data-conversation-session]');
+    const boxes = Array.from(document.querySelectorAll('.dshr-play-hl'));
+    const scope = state.scopeEl;
+    return {
+      session: sEl ? (sEl.getAttribute('data-conversation-session') || '') : '',
+      playing: state.playing,
+      paused: state.paused,
+      synth: !!(synth.speaking || synth.pending),
+      local: !!state.localAudio,
+      scopeConnected: !!(scope && scope.isConnected),
+      boxes: boxes.length,
+      boxDisplay: boxes.length ? (boxes[0].style.display || '') : '',
+      index: state.index,
+      sentences: state.sentences.length,
+    };
+  };
+
   function docOf(node) {
     return (node && node.ownerDocument) || document;
   }
