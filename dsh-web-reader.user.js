@@ -477,6 +477,8 @@
       hlTrace: window.__dshHlTrace,
       startCount: state.startCount || 0,
       boundaryCount: state.boundaryCount || 0,
+      sinceUserScroll: Date.now() - (state.lastUserScroll || 0),
+      scrollTrace: window.__dshScrollTrace.slice(-5),
     };
   };
 
@@ -663,18 +665,30 @@
   }
 
   // 让当前朗读位置始终靠近视口中线：像提词器一样平滑下滚
+  // B2 探针：最近几次滚动决策，回答"为什么视野没跟"
+  window.__dshScrollTrace = [];
+  function scrollTrace(entry) {
+    window.__dshScrollTrace.push(Object.assign({ at: Date.now() }, entry));
+    if (window.__dshScrollTrace.length > 30) window.__dshScrollTrace.shift();
+  }
+
   function revealRect(rect, node) {
-    if (!rect || state.paused) return;
+    if (!rect) { scrollTrace({ skip: 'no-rect' }); return; }
+    if (state.paused) { scrollTrace({ skip: 'paused' }); return; }
     const now = Date.now();
     // 用户刚手动滚过，先别抢控制权
-    if (now - (state.lastUserScroll || 0) < 2000) return;
+    if (now - (state.lastUserScroll || 0) < 2000) {
+      scrollTrace({ skip: 'user-scroll', age: now - (state.lastUserScroll || 0) });
+      return;
+    }
     // 我们自己刚滚过，等它稳定，避免和滚动事件互相拉扯
-    if (now - (state.autoScrollAt || 0) < 500) return;
+    if (now - (state.autoScrollAt || 0) < 500) { scrollTrace({ skip: 'just-scrolled' }); return; }
     const vh = window.innerHeight;
     const target = vh * 0.45;
     const delta = rect.top - target;
-    if (Math.abs(delta) < 8) return;
-    if (now - (state.lastScrollAt || 0) < 250) return;
+    if (Math.abs(delta) < 8) { scrollTrace({ skip: 'in-place', delta: Math.round(delta) }); return; }
+    if (now - (state.lastScrollAt || 0) < 250) { scrollTrace({ skip: 'throttled' }); return; }
+    scrollTrace({ scroll: Math.round(delta), top: Math.round(rect.top) });
     state.lastScrollAt = now;
     state.autoScrollAt = now;
     let p = node && node.parentElement;
