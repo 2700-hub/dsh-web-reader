@@ -767,7 +767,6 @@
     const delta = rect.top - target;
     if (Math.abs(delta) < 8) { scrollTrace({ skip: 'in-place', delta: Math.round(delta) }); return; }
     if (now - (state.lastScrollAt || 0) < 250) { scrollTrace({ skip: 'throttled' }); return; }
-    scrollTrace({ scroll: Math.round(delta), top: Math.round(rect.top) });
     state.lastScrollAt = now;
     state.autoScrollAt = now;
     let p = node && node.parentElement;
@@ -779,9 +778,23 @@
       if (/(auto|scroll)/.test(st.overflowY) && p.scrollHeight > p.clientHeight + 8) { scroller = p; break; }
       p = p.parentElement;
     }
+    const sName = scroller ? String(scroller.className || scroller.tagName).slice(0, 28) : 'window';
+    const before = scroller ? scroller.scrollTop : win.scrollY;
+    scrollTrace({ scroll: Math.round(delta), top: Math.round(rect.top), scroller: sName, before: Math.round(before) });
     try {
       if (scroller) scroller.scrollBy({ top: delta, behavior: 'smooth' });
       else win.scrollBy({ top: delta, behavior: 'smooth' });
+      // 平滑滚动可能被页面的 scroll anchoring 吃掉：450ms 后没动就瞬时补一次
+      setTimeout(() => {
+        try {
+          const after = scroller ? scroller.scrollTop : win.scrollY;
+          if (Math.abs(after - before) < 4) {
+            scrollTrace({ retry: 'instant', scroller: sName });
+            if (scroller) scroller.scrollTop = before + delta;
+            else win.scrollTo(0, win.scrollY + delta);
+          }
+        } catch (err) { /* 忽略 */ }
+      }, 450);
       // 滚动动画结束后再定位一次，高亮框才不会被留在旧位置（只定位，不再滚）
       clearTimeout(state.scrollTimer);
       state.scrollTimer = setTimeout(() => {
