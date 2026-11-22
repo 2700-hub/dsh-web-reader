@@ -1261,22 +1261,19 @@
     playTextFrom(text, 0, label);
   }
 
-  // 从当前句重新读（F2）。本地/系统两条路径都走，跟 seekTo 同一套分支。
+  // 从头重读这条消息（F2）。本地/系统两条路径都走，跟 seekTo 同一套分支。
   function replayCurrent() {
     if (!state.sentences.length) { toast('先读一条消息'); return; }
-    const cur = state.chunks[state.index];
-    let from = cur ? cur.from : Math.floor(state.progress || 0);
-    from = Math.max(0, Math.min(from, state.sentences.length - 1));
     if (state.local && state.localReady) {
       stop();
-      state.chunks = localBuildChunks(from);
+      state.chunks = localBuildChunks(0);
       state.queued = 0;
       localPlay(0);
-      toast('重读第 ' + (from + 1) + ' 句');
+      toast('从头重读这条');
       return;
     }
-    startFrom(from);
-    toast('重读第 ' + (from + 1) + ' 句');
+    startFrom(0);
+    toast('从头重读这条');
   }
 
   // 长暂停后 Chrome 的 resume() 经常静默失效：speaking 仍为 true、paused 卡住。
@@ -1429,7 +1426,7 @@
         <button data-act="rate" title="语速">⚡</button>
         <button data-act="vol" title="音量">🔉</button>
         <button data-act="pause" title="暂停 / 继续">⏸</button>
-        <button data-act="replay" title="重读当前句（Alt+R）">🔁</button>
+        <button data-act="replay" title="从头重读这条（Alt+R）">🔁</button>
         <button data-act="stop" title="停止（Alt+X）">⏹</button>
         <button class="dshr-min" title="收起/展开">–</button>
         <button class="dshr-close" title="关闭面板（Alt+P 找回）">×</button>
@@ -1451,7 +1448,7 @@
           href="https://github.com/2700-hub/dsh-web-reader#本地语音服务可选">本地语音服务怎么用？</a></div>
         <div class="dshr-row"><a class="dshr-update-link" target="_blank" rel="noopener" style="display:none">安装新版</a></div>
         <div class="dshr-row"><select class="dshr-voice"></select></div>
-        <div class="dshr-kbd">Alt+点击正文从该句读 · Alt+R 重读 · Alt+X 停止 · Alt+P 面板</div>
+        <div class="dshr-kbd">Alt+点击正文从该句读 · Alt+R 重读这条 · Alt+X 停止 · Alt+P 面板</div>
       </div>
       <div class="dshr-pop" data-pop="rate">
         <span class="dshr-pop-label">语速</span>
