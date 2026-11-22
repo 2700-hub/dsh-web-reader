@@ -474,6 +474,9 @@
       boxDisplay: boxes.length ? (boxes[0].style.display || '') : '',
       index: state.index,
       sentences: state.sentences.length,
+      hlTrace: window.__dshHlTrace,
+      startCount: state.startCount || 0,
+      boundaryCount: state.boundaryCount || 0,
     };
   };
 
@@ -697,10 +700,16 @@
   }
 
   // 逐字高亮：charIndex 是这一段文本里的字符下标
+  // B2 探针：记录最近一次高亮尝试的结果，回答"为什么没画出来"
+  window.__dshHlTrace = { reason: 'init' };
+  function hlTrace(reason, extra) {
+    window.__dshHlTrace = Object.assign({ reason, at: Date.now() }, extra || {});
+  }
+
   function highlightChar(scopeEl, chunkText, charIndex, opts) {
-    if (!scopeEl || !chunkText) return;
+    if (!scopeEl || !chunkText) { hlTrace('no-input'); return; }
     const cache = ensureCache(scopeEl);
-    if (!cache) return;
+    if (!cache) { hlTrace('no-cache'); return; }
     try {
       let ci = Math.max(0, Math.min(charIndex, chunkText.length - 1));
       let guard = 0;
@@ -709,12 +718,12 @@
       const WIN = 14;
       const winStart = Math.max(0, Math.min(ci, chunkText.length - WIN));
       const context = chunkText.slice(winStart, winStart + WIN).replace(/\s+/g, '');
-      if (context.length < 2) return;
+      if (context.length < 2) { hlTrace('context-too-short'); return; }
       const targetOffset = chunkText.slice(winStart, ci).replace(/\s+/g, '').length;
       const from = Math.max(0, (state.hlSearchPos || 0) - 80);
       let idx = cache.norm.indexOf(context, from);
       if (idx < 0) idx = cache.norm.indexOf(context);
-      if (idx < 0) return;
+      if (idx < 0) { hlTrace('not-found', { win: context, normLen: cache.norm.length }); return; }
       state.hlSearchPos = idx + context.length;
       state.hlChunk = { text: chunkText, index: charIndex };
 
@@ -723,13 +732,13 @@
       const endRaw = cache.map[pos] + 1;
       const a = locatePos(cache, startRaw);
       const b = locatePos(cache, endRaw);
-      if (!a || !b) return;
+      if (!a || !b) { hlTrace('locate-fail'); return; }
       const doc = docOf(scopeEl);
       const range = doc.createRange();
       range.setStart(a.node, a.offset);
       range.setEnd(b.node, b.offset);
       const rects = Array.prototype.slice.call(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
-      if (!rects.length) return;
+      if (!rects.length) { hlTrace('no-rects'); return; }
       clearPlayHighlight();
       const r = rects[0];
       const d = ensurePlayHl(0, doc);
@@ -738,8 +747,11 @@
       d.style.width = (r.width + 4) + 'px';
       d.style.height = (r.height + 2) + 'px';
       d.style.display = 'block';
+      hlTrace('ok', { ci, idx, left: Math.round(r.left), top: Math.round(r.top) });
       if (!opts || !opts.noScroll) revealRect(r, a.node);
-    } catch (err) { /* 忽略 */ }
+    } catch (err) {
+      hlTrace('exception', { msg: String(err && err.message || err) });
+    }
   }
 
   // 边界事件很密，用 rAF 合并
@@ -1107,6 +1119,7 @@
 
     u.onstart = () => {
       if (gen !== state.gen) return;
+      state.startCount = (state.startCount || 0) + 1;
       state.index = i;
       state.progress = chunk.from;
       state.current = chunk.text;
@@ -1121,6 +1134,7 @@
     // 记录"念到第几个字"，同时把高亮挪到当前字
     u.onboundary = (ev) => {
       if (gen !== state.gen) return;
+      state.boundaryCount = (state.boundaryCount || 0) + 1;
       if (typeof ev.charIndex !== 'number') return;
       state.boundary = { i, charIndex: ev.charIndex };
       // 段内也推进进度条，否则一段几百字走完条都不动
