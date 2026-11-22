@@ -40,7 +40,7 @@
 | 数据 | 存在哪 | 谁写 | 什么时候清 | 不清会怎样 |
 |---|---|---|---|---|
 | `sentences` / `chunks` | 内存 | `playTextFrom` | 下次播放 | 体积小，可忽略 |
-| `autoQueue` / `autoSeen` / `autoBaseline` | 内存 | `scanAuto` | 换会话、关开关 | 误读旧消息 |
+| `autoSeen` / `autoBaseline` / `autoSession` | 内存 | `scanAuto` | 换会话、关开关 | 误读旧消息 |
 | `localUrls`（blob） | 浏览器内存 | `localPrefetch` | `stop()` | 内存上涨 |
 | 设置（语速/音量/音色/本地/自动） | localStorage | 面板 | 手动清 | 设置丢失 |
 | TTS 音频与时间戳 | 服务端磁盘 `%TEMP%` | `server.mjs` | 7 天 / 300MB | 占磁盘 |

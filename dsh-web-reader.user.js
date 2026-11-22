@@ -81,7 +81,6 @@
     // 自动朗读：只在回合结束时读明确的回答容器（见 scanAuto）
     auto: localStorage.getItem(LS_AUTO) === '1',
     autoSeen: new Set(),
-    autoQueue: [],
     autoBaseline: 0,
     autoHref: '',
     autoInit: false,
@@ -90,7 +89,6 @@
     autoSession: '',
     autoWaitLogged: new Set(),
     lastSpeakAt: 0,
-    draining: false,
     localReady: false,
     localAudio: null,
     localToken: 0,
@@ -316,16 +314,6 @@
     play(text, '自动朗读', 'auto');
   }
 
-  function drainAuto() {
-    if (!state.auto || !state.autoQueue.length) return;
-    const next = state.autoQueue.shift();
-    autoLog('drain', { turn: next.turn, left: state.autoQueue.length });
-    state.scopeEl = next.el || null;
-    state.hlCache = null;
-    state.draining = true;
-    try { play(next.text, '自动朗读', 'auto'); } finally { state.draining = false; }
-  }
-
   // 决策日志：控制台 __dshAutoLog 看最近 50 条，用来回答"它为什么没读"
   window.__dshAutoLog = [];
   function autoLog(event, data) {
@@ -340,7 +328,7 @@
     if (!state.auto || !state.playing || state.paused || state.local) return;
     if (Date.now() - (state.lastSpeakAt || 0) < 4000) return;
     if (synth.speaking || synth.pending) return;
-    autoLog('stuck-finish', { queue: state.autoQueue.length });
+    autoLog('stuck-finish');
     finish();
   }
 
@@ -348,7 +336,7 @@
   // 手动朗读不动——那是用户自己点的，让他听完。
   function resetForNewSession() {
     if (state.playing && state.playKind === 'auto') {
-      autoLog('session-reset', { queue: state.autoQueue.length });
+      autoLog('session-reset');
       stop();
     }
     markAutoBaseline();
@@ -400,13 +388,11 @@
         continue; // 回答容器还没渲染出来，下次再看
       }
       const text = textOfEl(el);
-      autoLog('ready', { turn, textLen: text.length, playing: state.playing, queue: state.autoQueue.length });
+      autoLog('ready', { turn, textLen: text.length, playing: state.playing });
       if (!shouldAutoRead(text)) { state.autoSeen.add(turn); autoLog('skip-empty', { turn }); continue; }
       state.autoSeen.add(turn); // 只读一次
       enqueueAuto(turn, text, el);
     }
-    // 自愈：没有在播、队列里还有东西 → 立即放出来（不依赖 finish 一定被调用）
-    if (!state.playing && state.autoQueue.length) drainAuto();
   }
 
   function markAutoBaseline() {
@@ -415,7 +401,6 @@
     state.autoBaseline = ids.length ? ids[ids.length - 1] : 0;
     state.autoHref = location.href;
     state.autoSeen.clear();
-    state.autoQueue.length = 0;
   }
 
   let autoObserver = null;
@@ -828,7 +813,6 @@
     state.index = 0;
     state.progress = 0;
     state.queued = 0;
-    if (!state.draining) state.autoQueue.length = 0;
     state.current = null;
     state.hlCache = null;
     state.hlChunk = null;
@@ -853,8 +837,7 @@
     clearPlayHighlight();
     clearInterval(state.localTimer);
     render('朗读完成');
-    autoLog('finish', { queue: state.autoQueue.length });
-    drainAuto();
+    autoLog('finish');
   }
 
   /* ---------------- 本地语音（tools/tts-server） ---------------- */
@@ -1597,7 +1580,6 @@
           startAutoWatch();
           toast('已开启：新回复生成完自动朗读');
         } else {
-          state.autoQueue.length = 0;
           toast('已关闭自动朗读');
         }
       });
@@ -1608,7 +1590,6 @@
     if (btnStop) {
       btnStop.addEventListener('click', () => {
         autoLog('btn-stop', {});
-        state.autoQueue.length = 0;
         stop();
       });
     }
@@ -2041,7 +2022,6 @@
     const d = doc || document;
     if (!e.altKey) return;
     state.playKind = 'manual';
-    state.autoQueue.length = 0; // 手动朗读优先，丢掉还没读的自动队列
     const win = d.defaultView || window;
     const sel = String(win.getSelection ? win.getSelection() : '').trim();
     const path = (e.composedPath && e.composedPath()) || [];
@@ -2151,7 +2131,6 @@
     if (is('x')) {
       e.preventDefault();
       autoLog('key', { code, key: k, action: 'stop' });
-      state.autoQueue.length = 0;
       stop();
     } else if (is('p')) {
       e.preventDefault();
