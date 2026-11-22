@@ -332,13 +332,17 @@
     finish();
   }
 
-  // 切会话：停掉旧的自动朗读、清空队列、重设基线。
-  // 手动朗读不动——那是用户自己点的，让他听完。
+  // 切会话：一律停掉朗读——内容已经不在当前会话里了，继续读只会对着空白念。
+  // 以前对手动朗读放行，结果暂停状态跨会话存活、高亮卡在已删除节点上（B1）。
   function resetForNewSession() {
-    if (state.playing && state.playKind === 'auto') {
-      autoLog('session-reset');
+    const wasActive = state.playing || synth.speaking || synth.pending;
+    if (wasActive) {
+      autoLog('session-reset', { kind: state.playKind });
       stop();
+      toast('会话已切换，朗读已停止');
     }
+    state.scopeEl = null;
+    clearPlayHighlight();
     markAutoBaseline();
   }
 
