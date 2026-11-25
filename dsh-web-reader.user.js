@@ -2489,6 +2489,34 @@
   }
 
   let booted = false;
+  // 输入框焦点守卫：DSH 偶尔会在没有用户点击时把焦点从输入框挪到某个按钮上
+  // （禁用脚本也能复现，是页面自身行为）。这里只处理"没人点、焦点却被挪走"的情况；
+  // 用户自己点别处（pointerdown / keydown 后 700ms 内）绝不抢回。
+  // 不想要这个兜底：localStorage['dsh-reader.focusGuard'] = '0'
+  function installFocusGuard() {
+    if (localStorage.getItem('dsh-reader.focusGuard') === '0') return;
+    let lastUserAt = 0;
+    const markUser = () => { lastUserAt = Date.now(); };
+    document.addEventListener('pointerdown', markUser, true);
+    document.addEventListener('keydown', markUser, true);
+    document.addEventListener('focusout', (e) => {
+      const from = e.target;
+      if (!from || !from.isContentEditable) return;
+      if (!from.closest || !from.closest('[data-conversation-region="composer"]')) return;
+      if (Date.now() - lastUserAt < 700) return; // 用户自己切走的，别管
+      setTimeout(() => {
+        const cur = document.activeElement;
+        if (!cur || cur === from || cur === document.body) return;
+        if (cur.tagName !== 'BUTTON') return;
+        if (!cur.closest || !cur.closest('[data-conversation-region="composer"]')) return;
+        try {
+          from.focus();
+          autoLog('focus-guard', { to: String(cur.className || '').slice(0, 24) });
+        } catch (err) { /* 忽略 */ }
+      }, 80);
+    }, true);
+  }
+
   function boot() {
     if (booted) return;
     if (!document.body) { setTimeout(boot, 50); return; }
@@ -2533,6 +2561,7 @@
     attachFrames();
     setInterval(attachFrames, 2000);
     window.addEventListener('resize', () => setTimeout(placePanel, 200));
+    installFocusGuard();
     // 会话监听独立于自动朗读：自动关着也要能发现切会话（B1）并保留续读位置（F5）
     startSessionWatch();
     // 自动朗读：只观察，不猜；基线等聊天列表出现后再定（见 scanAuto）
