@@ -71,6 +71,7 @@
 
 ## 已完成
 
+- [x] `hlSearchPos` 收口：唯一归零点 `resetHlSearch()`，裸写 7 处 → 2 处（1 前进 + 1 归零，未发版）
 - [x] `scopeEl` 收口：唯一写入口 `setScope()`，裸写 7 处 → 1 处（未发版）
 - [x] 播放状态收口：`playing` / `paused` 只由 `setPlayback()` 写，裸写 14 处 → 2 处（未发版）
 - [x] B6 重复词回跳：搜索位置跨段单调 + 代码块整块高亮（未发版）

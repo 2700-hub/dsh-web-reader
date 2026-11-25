@@ -718,6 +718,12 @@
     playHlDocs.forEach((list) => list.forEach((el) => { if (el) el.style.display = 'none'; }));
   }
 
+  // 唯一的高亮搜索归零点；前进只在 highlightChar 里发生。
+  function resetHlSearch(why) {
+    state.hlSearchPos = 0;
+    if (why) autoLog('hl-reset', { why });
+  }
+
   // 唯一的高亮作用域写入口。换元素时三件事必须一起发生：
   // 位置归零、缓存失效、旧框清掉。以前这三件散在五个调用点，
   // 漏一个就是"高亮画在旧元素上"或"换了内容还在用旧缓存"。
@@ -725,7 +731,7 @@
     state.scopeEl = el || null;
     state.hlCache = null;
     state.hlChunk = null;
-    state.hlSearchPos = 0;
+    resetHlSearch();
     clearPlayHighlight();
     if (why) autoLog('scope', { why, has: !!state.scopeEl });
   }
@@ -1034,7 +1040,7 @@
     state.current = null;
     state.hlCache = null;
     state.hlChunk = null;
-    state.hlSearchPos = 0;
+    resetHlSearch('stop');
     clearPlayHighlight();
     if (wasActive) {
       synth.cancel();
@@ -1050,7 +1056,7 @@
     state.index = state.chunks.length;
     state.progress = state.sentences.length;
     state.hlChunk = null;
-    state.hlSearchPos = 0;
+    resetHlSearch('finish');
     clearPlayHighlight();
     clearInterval(state.localTimer);
     render('朗读完成');
@@ -1261,7 +1267,7 @@
     state.index = c;
     state.progress = chunk.from;
     state.current = chunk.text;
-    state.hlSearchPos = 0;
+    resetHlSearch('local');
     render();
     setLoading(true, chunk.text.length);
     localAudioFor(c, token);
@@ -1421,7 +1427,7 @@
   // 从头重读这条消息（F2）。本地/系统两条路径都走，跟 seekTo 同一套分支。
   function replayCurrent() {
     if (!state.sentences.length) { toast('先读一条消息'); return; }
-    state.hlSearchPos = 0; // 从头重读，位置归零
+    resetHlSearch('replay'); // 从头重读，位置归零
     if (state.local && state.localReady) {
       stop();
       state.chunks = localBuildChunks(0);
@@ -1914,7 +1920,7 @@
     function seekTo(clientX) {
       if (!state.sentences.length) { toast('先读一条消息'); return; }
       const i = sentenceAt(clientX);
-      state.hlSearchPos = 0; // 跳转是新的起点，允许从头找
+      resetHlSearch('seek'); // 跳转是新的起点，允许从头找
       if (state.local) {
         if (!state.localReady) { toast('本地语音服务未启动'); return; }
         stop();
