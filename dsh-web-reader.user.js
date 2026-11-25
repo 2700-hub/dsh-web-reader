@@ -50,6 +50,21 @@
   // 构建标记：确认装的是哪一版（版本号没变时靠它区分）
   window.__dshBuild = SCRIPT_VERSION + '+local-fallback';
 
+  // 焦点日志：排查"点进输入框、鼠标一离开就失去焦点"这类问题
+  window.__dshFocusLog = [];
+  ['focusin', 'focusout'].forEach((type) => {
+    document.addEventListener(type, (e) => {
+      const t = e.target || {};
+      window.__dshFocusLog.push({
+        at: new Date().toISOString().slice(11, 19),
+        type,
+        tag: t.tagName || '',
+        cls: String(t.className || '').slice(0, 40),
+      });
+      if (window.__dshFocusLog.length > 40) window.__dshFocusLog.shift();
+    }, true);
+  });
+
   if (window.__dshReader) return;
   window.__dshReader = true;
 
@@ -2450,7 +2465,10 @@
 
   function ensureAttached() {
     if (!root || !document.body) return;
-    if (!root.isConnected) document.body.appendChild(root);
+    if (!root.isConnected) {
+      document.body.appendChild(root);
+      autoLog('reattach', {});
+    }
     hoverHlDocs.forEach((el, doc) => {
       if (el && !el.isConnected && doc.body) doc.body.appendChild(el);
     });
