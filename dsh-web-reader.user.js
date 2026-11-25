@@ -1252,7 +1252,8 @@
       state.current = chunk.text;
       state.boundary = null;
       if (state.scopeEl) {
-        state.hlSearchPos = 0;
+        // 不要在这里重置 hlSearchPos：每段都从全文开头找，重复词就会跳回前一段。
+        // 位置只在"新开一次朗读 / 跳转 / 重读"时归零（stop、seekTo、replayCurrent）。
         queueCharHighlight(state.scopeEl, chunk.text, 0);
       }
       render();
@@ -1377,6 +1378,7 @@
   // 从头重读这条消息（F2）。本地/系统两条路径都走，跟 seekTo 同一套分支。
   function replayCurrent() {
     if (!state.sentences.length) { toast('先读一条消息'); return; }
+    state.hlSearchPos = 0; // 从头重读，位置归零
     if (state.local && state.localReady) {
       stop();
       state.chunks = localBuildChunks(0);
@@ -1852,6 +1854,7 @@
     function seekTo(clientX) {
       if (!state.sentences.length) { toast('先读一条消息'); return; }
       const i = sentenceAt(clientX);
+      state.hlSearchPos = 0; // 跳转是新的起点，允许从头找
       if (state.local) {
         if (!state.localReady) { toast('本地语音服务未启动'); return; }
         stop();
