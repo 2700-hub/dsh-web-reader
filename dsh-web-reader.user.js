@@ -560,6 +560,7 @@
       boundaryCount: state.boundaryCount || 0,
       sinceUserScroll: Date.now() - (state.lastUserScroll || 0),
       scrollTrace: window.__dshScrollTrace.slice(-5),
+      hlPerf: { calls: hlPerf.calls, maxMs: hlPerf.maxMs },
     };
   };
 
@@ -813,8 +814,11 @@
   function hlTrace(reason, extra) {
     window.__dshHlTrace = Object.assign({ reason, at: Date.now() }, extra || {});
   }
+  // 性能计数：调用次数 + 单次最久耗时（毫秒）
+  const hlPerf = { calls: 0, maxMs: 0 };
 
   function highlightChar(scopeEl, chunkText, charIndex, opts) {
+    const t0 = performance.now();
     if (!scopeEl || !chunkText) { hlTrace('no-input'); return; }
     const cache = ensureCache(scopeEl);
     if (!cache) { hlTrace('no-cache'); return; }
@@ -880,6 +884,10 @@
       if (!opts || !opts.noScroll) revealRect(r, a.node);
     } catch (err) {
       hlTrace('exception', { msg: String(err && err.message || err) });
+    } finally {
+      hlPerf.calls += 1;
+      const dt = performance.now() - t0;
+      if (dt > hlPerf.maxMs) hlPerf.maxMs = Math.round(dt * 10) / 10;
     }
   }
 
