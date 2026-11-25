@@ -1501,7 +1501,11 @@
         font: 12px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
         color: #e8eaed; background: rgba(24,26,31,.96); border: 1px solid rgba(255,255,255,.14);
         border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.45); padding: 10px 12px;
-        width: 280px; backdrop-filter: blur(8px); user-select: none; }
+        width: 280px; backdrop-filter: blur(8px); user-select: none; pointer-events: none; }
+      /* 只有控件吃点击：面板压在输入框上时，点空白处也能落到下面的输入框 */
+      #dsh-reader button, #dsh-reader input, #dsh-reader select,
+      #dsh-reader label, #dsh-reader a, #dsh-reader .dshr-head,
+      #dsh-reader .dshr-bar, #dsh-reader .dshr-pop { pointer-events: auto; }
       #dsh-reader[data-collapsed="1"] { width: 200px; padding: 6px 8px; }
       #dsh-reader[data-collapsed="1"] .dshr-label { display: none; }
       #dsh-reader[data-collapsed="1"] .dshr-row { margin-top: 4px; gap: 4px; }
@@ -1571,6 +1575,19 @@
     document.head.appendChild(style);
   }
 
+  // 面板默认贴右下角，可能正好压住输入框：启动时如果和输入区重叠，就抬到它上面
+  function placePanel() {
+    if (!root || root.style.display === 'none') return;
+    if (root.style.left) return; // 用户自己拖过，尊重他的位置
+    const composer = document.querySelector('[data-conversation-region="composer"]');
+    if (!composer) return;
+    const pr = root.getBoundingClientRect();
+    const cr = composer.getBoundingClientRect();
+    if (cr.height > 0 && pr.left < cr.right && pr.right > cr.left && pr.bottom > cr.top) {
+      root.style.bottom = Math.max(8, window.innerHeight - cr.top + 8) + 'px';
+    }
+  }
+
   function build() {
     root = document.createElement('div');
     root.id = 'dsh-reader';
@@ -1620,6 +1637,7 @@
       </div>
     `;
     document.body.appendChild(root);
+    setTimeout(placePanel, 60);
 
     barBox = root.querySelector('.dshr-bar');
     bar = root.querySelector('.dshr-bar i');
@@ -2488,6 +2506,7 @@
     // 顶层监听 + 同源 iframe 监听（ThoughtDAG 画布在 iframe 里）
     attachFrames();
     setInterval(attachFrames, 2000);
+    window.addEventListener('resize', () => setTimeout(placePanel, 200));
     // 会话监听独立于自动朗读：自动关着也要能发现切会话（B1）并保留续读位置（F5）
     startSessionWatch();
     // 自动朗读：只观察，不猜；基线等聊天列表出现后再定（见 scanAuto）
