@@ -347,6 +347,20 @@
     finish();
   }
 
+  // 会话号的唯一写入口
+  function setAutoSession(id, why) {
+    const next = id || '';
+    if (state.autoSession === next) return;
+    state.autoSession = next;
+    autoLog('session', { why: why || '', id: next.slice(0, 8) });
+  }
+
+  // 续读记录的唯一写入口（顺带刷新按钮显示）
+  function setResume(r) {
+    state.resume = r || null;
+    updateResumeUI();
+  }
+
   // F5：切走前记住"读到哪"，回到同一会话时提供续读
   function saveResume() {
     if (!state.playing) return;
@@ -354,12 +368,12 @@
     const turnEl = scope && scope.closest ? scope.closest('[data-chat-turn]') : null;
     const turnId = turnEl ? Number(turnEl.getAttribute('data-chat-turn')) : 0;
     if (!turnId || !state.sentences.length) return;
-    state.resume = {
+    setResume({
       session: state.autoSession || '',
       turn: turnId,
       index: Math.max(0, Math.min(state.sentences.length - 1, Math.floor(state.progress || 0))),
       sentences: state.sentences.slice(),
-    };
+    });
   }
 
   function updateResumeUI() {
@@ -381,8 +395,7 @@
     const el = answerElOf(r.turn);
     if (!el) {
       toast('找不到上次的内容，可能已被清理');
-      state.resume = null;
-      updateResumeUI();
+      setResume(null);
       return;
     }
     setScope(el, 'resume');
@@ -396,8 +409,7 @@
     } else {
       startFrom(idx);
     }
-    state.resume = null;
-    updateResumeUI();
+    setResume(null);
     toast('从第 ' + (idx + 1) + ' 句继续');
   }
 
@@ -419,7 +431,7 @@
   // 顺序反了的话，续读会被记到新会话名下，切回来就对不上了。
   function onSessionChange(newId) {
     saveResume();
-    state.autoSession = newId;
+    setAutoSession(newId, 'switch');
     resetForNewSession();
   }
 
@@ -435,7 +447,7 @@
     if (!state.autoInit) {
       if (!list.length) return;
       state.autoInit = true;
-      state.autoSession = sessionId;
+      setAutoSession(sessionId, 'init');
       markAutoBaseline();
       return;
     }
@@ -445,7 +457,7 @@
       onSessionChange(sessionId);
       return;
     }
-    if (sessionId && !state.autoSession) state.autoSession = sessionId;
+    if (sessionId && !state.autoSession) setAutoSession(sessionId, 'late-init');
     // 兜底：URL 变了，或回合号整体回退
     if (location.href !== state.autoHref || (list.length && list[list.length - 1] < state.autoBaseline)) {
       resetForNewSession();
@@ -492,7 +504,7 @@
       const sEl = document.querySelector('[data-conversation-session]');
       const id = sEl ? (sEl.getAttribute('data-conversation-session') || '') : '';
       if (!id) return;
-      if (!state.autoSession) { state.autoSession = id; return; }
+      if (!state.autoSession) { setAutoSession(id, 'watch-init'); return; }
       if (id !== state.autoSession) {
         onSessionChange(id);
       }
@@ -724,13 +736,22 @@
     if (why) autoLog('hl-reset', { why });
   }
 
+  // 高亮缓存与当前字的唯一失效入口
+  function invalidateHl() {
+    state.hlCache = null;
+    state.hlChunk = null;
+  }
+
+  function setHlChunk(text, index) {
+    state.hlChunk = { text, index };
+  }
+
   // 唯一的高亮作用域写入口。换元素时三件事必须一起发生：
   // 位置归零、缓存失效、旧框清掉。以前这三件散在五个调用点，
   // 漏一个就是"高亮画在旧元素上"或"换了内容还在用旧缓存"。
   function setScope(el, why) {
     state.scopeEl = el || null;
-    state.hlCache = null;
-    state.hlChunk = null;
+    invalidateHl();
     resetHlSearch();
     clearPlayHighlight();
     if (why) autoLog('scope', { why, has: !!state.scopeEl });
@@ -869,7 +890,7 @@
       if (idx < 0) idx = cache.norm.indexOf(context, Math.max(0, from - 120));
       if (idx < 0) { hlTrace('not-found', { win: context, normLen: cache.norm.length }); return; }
       state.hlSearchPos = idx + context.length;
-      state.hlChunk = { text: chunkText, index: charIndex };
+      setHlChunk(chunkText, charIndex);
 
       const pos = Math.min(cache.map.length - 1, idx + Math.min(targetOffset, context.length - 1));
       const startRaw = cache.map[pos];
@@ -1038,8 +1059,7 @@
     state.progress = 0;
     state.queued = 0;
     state.current = null;
-    state.hlCache = null;
-    state.hlChunk = null;
+    invalidateHl();
     resetHlSearch('stop');
     clearPlayHighlight();
     if (wasActive) {
@@ -1055,7 +1075,7 @@
     state.current = null;
     state.index = state.chunks.length;
     state.progress = state.sentences.length;
-    state.hlChunk = null;
+    invalidateHl();
     resetHlSearch('finish');
     clearPlayHighlight();
     clearInterval(state.localTimer);
@@ -1082,16 +1102,24 @@
     setLoading(false);
   }
 
+  // 本地/系统语音切换的唯一入口：状态、localStorage、勾选框一起改
+  function setLocalMode(on, why) {
+    const next = !!on;
+    if (state.local === next) return;
+    state.local = next;
+    try { localStorage.setItem(LS_LOCAL, next ? '1' : '0'); } catch (err) { /* 忽略 */ }
+    const cb = root && root.querySelector('.dshr-local-cb');
+    if (cb) cb.checked = next;
+    autoLog('local', { why: why || '', on: next });
+  }
+
   // 本地服务不可用时，不要静默停：关掉本地开关，从当前段开始用系统语音接着读。
   // 这样本地服务只是"增强"，坏了也不影响主功能。
   function localFallback(reason) {
     clearInterval(state.localTimer);
     localStop();
-    state.local = false;
+    setLocalMode(false, 'fallback');
     state.localReady = false;
-    try { localStorage.setItem(LS_LOCAL, '0'); } catch (err) { /* 忽略 */ }
-    const cb = document.querySelector('.dshr-local-cb');
-    if (cb) cb.checked = false;
     toast(reason || '本地语音不可用，已切回系统语音');
     const cur = state.chunks[state.index];
     state.gen += 1;
@@ -1406,8 +1434,7 @@
     if (state.local) {
       if (!state.localReady) {
         toast('本地语音服务未启动');
-        state.local = false;
-        localStorage.setItem(LS_LOCAL, '0');
+        setLocalMode(false, 'not-ready');
         startFrom(idx);
         return;
       }
@@ -1819,10 +1846,7 @@
         setTimeout(() => {
           localPing().then((ok) => {
             if (ok) {
-              state.local = true;
-              localStorage.setItem(LS_LOCAL, '1');
-              const cb = root.querySelector('.dshr-local-cb');
-              if (cb) cb.checked = true;
+              setLocalMode(true, 'start-server');
               toast('本地语音已就绪');
               render();
             } else {
@@ -1839,17 +1863,14 @@
     if (localCb) {
       localCb.checked = !!state.local;
       localCb.addEventListener('change', () => {
-        state.local = localCb.checked;
-        localStorage.setItem(LS_LOCAL, state.local ? '1' : '0');
+        setLocalMode(localCb.checked, 'toggle');
         stop();
         if (!state.local) { toast('已切回系统语音'); render(); return; }
         localPing().then((ok) => {
           if (ok) {
             toast('已切换到本地语音（云健）');
           } else {
-            state.local = false;
-            localStorage.setItem(LS_LOCAL, '0');
-            localCb.checked = false;
+            setLocalMode(false, 'ping-fail');
             showStartServer(true);
             toast('本地语音服务未启动：先点「本地语音服务怎么用？」');
           }
@@ -2323,8 +2344,7 @@
     const d = doc || document;
     if (!e.altKey) return;
     state.playKind = 'manual';
-    state.resume = null; // 手动点了新内容，之前的续读作废
-    updateResumeUI();
+    setResume(null); // 手动点了新内容，之前的续读作废
     const win = d.defaultView || window;
     const sel = String(win.getSelection ? win.getSelection() : '').trim();
     const path = (e.composedPath && e.composedPath()) || [];

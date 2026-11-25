@@ -71,6 +71,10 @@
 
 ## 已完成
 
+- [x] `local` 收口：唯一写入口 `setLocalMode()`，状态/存储/勾选框一起改（未发版）
+- [x] `resume` 收口：唯一写入口 `setResume()`（未发版）
+- [x] `autoSession` 收口：唯一写入口 `setAutoSession()`，4 处 → 1 处（未发版）
+- [x] `hlChunk` / `hlCache` 收口：`invalidateHl()` / `setHlChunk()`（未发版）
 - [x] `hlSearchPos` 收口：唯一归零点 `resetHlSearch()`，裸写 7 处 → 2 处（1 前进 + 1 归零，未发版）
 - [x] `scopeEl` 收口：唯一写入口 `setScope()`，裸写 7 处 → 1 处（未发版）
 - [x] 播放状态收口：`playing` / `paused` 只由 `setPlayback()` 写，裸写 14 处 → 2 处（未发版）
