@@ -31,6 +31,39 @@ git push --follow-tags origin main
 
 ---
 
+## [1.20.2] - 2026-11-25
+
+### 变更
+
+- 共享状态全部收口，每个状态只留一个写入口：
+
+| 状态 | 收口前 | 收口后 | 入口 |
+|---|---|---|---|
+| `autoSession` | 4 | 1 | `setAutoSession()` |
+| `resume` | 4 | 1 | `setResume()` |
+| `local` | 5 | 1 | `setLocalMode()` |
+| `hlChunk` | 4 | 2 | `invalidateHl()` / `setHlChunk()` |
+| `hlCache` | 3 | 2 | `invalidateHl()` / `ensureCache()` |
+
+- 新增日志事件：`session` / `local` / `hl-reset` / `scope`，记录每次状态切换是谁触发的
+- 输入框焦点守卫（`focusGuard`）：只在"没人点击、焦点却被挪到输入区按钮上"时把焦点还给输入框
+
+### 修复
+
+- 无（纯重构，行为不变）
+
+### 技术说明
+
+收口的统一做法：一个状态只有一个写入口，把"必须一起发生的动作"绑在入口里。
+比如 `setScope()` 一定同时清缓存、清位置、清旧框；`setLocalMode()` 一定同时改
+勾选框和 localStorage；`setResume()` 一定同时刷新按钮显示。
+
+**没有收口的**：`chunks` / `index` / `queued` / `progress` / `current`。
+这五个是"播放游标"，总是一起变、只被播放函数写，包一层只会多一层间接，
+不会减少 bug。收口的目标是防错，不是追求"每个字段都有 setter"。
+
+---
+
 ## [1.20.1] - 2026-11-25
 
 ### 变更
