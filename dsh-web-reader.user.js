@@ -828,7 +828,9 @@
       const targetOffset = chunkText.slice(winStart, ci).replace(/\s+/g, '').length;
       const from = Math.max(0, (state.hlSearchPos || 0) - 80);
       let idx = cache.norm.indexOf(context, from);
-      if (idx < 0) idx = cache.norm.indexOf(context);
+      // 找不到时只往回看一小段，绝不回到全文开头——
+      // 否则重复词会让高亮在几个代码块之间来回跳（B6）
+      if (idx < 0) idx = cache.norm.indexOf(context, Math.max(0, from - 120));
       if (idx < 0) { hlTrace('not-found', { win: context, normLen: cache.norm.length }); return; }
       state.hlSearchPos = idx + context.length;
       state.hlChunk = { text: chunkText, index: charIndex };
@@ -840,6 +842,25 @@
       const b = locatePos(cache, endRaw);
       if (!a || !b) { hlTrace('locate-fail'); return; }
       const doc = docOf(scopeEl);
+      // 代码块整块高亮：逐字定位在重复词上会乱跳，而且代码超过 400 字会被
+      // 截断成「…」，那个字符在 DOM 里不存在，逐字永远找不到位置。
+      const preEl = a.node.parentElement && a.node.parentElement.closest
+        ? a.node.parentElement.closest('pre') : null;
+      if (preEl) {
+        const pr = preEl.getBoundingClientRect();
+        if (pr.width > 0 && pr.height > 0) {
+          clearPlayHighlight();
+          const pd = ensurePlayHl(0, doc);
+          pd.style.left = (pr.left - 2) + 'px';
+          pd.style.top = (pr.top - 1) + 'px';
+          pd.style.width = (pr.width + 4) + 'px';
+          pd.style.height = (pr.height + 2) + 'px';
+          pd.style.display = 'block';
+          hlTrace('ok-block', { top: Math.round(pr.top), h: Math.round(pr.height) });
+          if (!opts || !opts.noScroll) revealRect(pr, preEl);
+          return;
+        }
+      }
       const range = doc.createRange();
       range.setStart(a.node, a.offset);
       range.setEnd(b.node, b.offset);
@@ -1379,6 +1400,22 @@
     if (reason) toast(reason);
   }
 
+  // B5：暂停时用户滚动，高亮要贴着文字走。
+  // 只靠 scroll 事件不够稳（滚动可能发生在内部容器上），
+  // 暂停期间用 120ms 定时器重算位置，代价很小；恢复/停止后自动停。
+  let pausedHlTimer = 0;
+  function startPausedHlLoop() {
+    if (pausedHlTimer) return;
+    pausedHlTimer = setInterval(() => {
+      if (!state.paused || !state.hlChunk || !state.scopeEl) {
+        clearInterval(pausedHlTimer);
+        pausedHlTimer = 0;
+        return;
+      }
+      highlightChar(state.scopeEl, state.hlChunk.text, state.hlChunk.index, { noScroll: true });
+    }, 120);
+  }
+
   function togglePause() {
     // 本地语音模式：直接控制 Audio 元素
     if (state.local && state.localAudio) {
@@ -1388,6 +1425,7 @@
       } else {
         state.paused = true;
         state.localAudio.pause();
+        startPausedHlLoop();
       }
       render();
       return;
@@ -1429,6 +1467,7 @@
       state.pausedAt = Date.now();
       state.autoScrollAt = Date.now();
       clearTimeout(state.scrollTimer);
+      startPausedHlLoop();
       render('已暂停');
     }
   }
