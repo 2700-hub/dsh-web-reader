@@ -1703,6 +1703,7 @@
       root.style.right = '16px';
       root.style.bottom = '16px';
       try { localStorage.removeItem(POS_KEY); } catch (err) { /* 忽略 */ }
+      setTimeout(placePanel, 30);
     });
 
     root.querySelector('.dshr-close').addEventListener('click', () => {
