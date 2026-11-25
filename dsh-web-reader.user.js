@@ -324,8 +324,7 @@
       stop();
     }
     // 高亮和自动滚动都挂在 scopeEl 上：手动朗读会设，自动朗读也必须设，否则没有高亮
-    state.scopeEl = el || null;
-    state.hlCache = null;
+    setScope(el, 'auto');
     autoLog('play', { turn, textLen: text.length });
     play(text, '自动朗读', 'auto');
   }
@@ -386,8 +385,7 @@
       updateResumeUI();
       return;
     }
-    state.scopeEl = el;
-    state.hlCache = null;
+    setScope(el, 'resume');
     state.sentences = r.sentences.slice();
     const idx = Math.max(0, Math.min(r.index, r.sentences.length - 1));
     if (state.local && state.localReady) {
@@ -412,8 +410,7 @@
       stop();
       toast('会话已切换，朗读已停止');
     }
-    state.scopeEl = null;
-    clearPlayHighlight();
+    setScope(null, 'session');
     markAutoBaseline();
     updateResumeUI();
   }
@@ -719,6 +716,18 @@
   }
   function clearPlayHighlight() {
     playHlDocs.forEach((list) => list.forEach((el) => { if (el) el.style.display = 'none'; }));
+  }
+
+  // 唯一的高亮作用域写入口。换元素时三件事必须一起发生：
+  // 位置归零、缓存失效、旧框清掉。以前这三件散在五个调用点，
+  // 漏一个就是"高亮画在旧元素上"或"换了内容还在用旧缓存"。
+  function setScope(el, why) {
+    state.scopeEl = el || null;
+    state.hlCache = null;
+    state.hlChunk = null;
+    state.hlSearchPos = 0;
+    clearPlayHighlight();
+    if (why) autoLog('scope', { why, has: !!state.scopeEl });
   }
 
   function buildHlCache(scopeEl) {
@@ -2321,7 +2330,7 @@
       e.preventDefault();
       e.stopPropagation();
       if (sel.length > 1) {
-        state.scopeEl = null;
+        setScope(null, 'selection');
         play(sel, '选中内容');
         return;
       }
@@ -2331,8 +2340,7 @@
       let text = blocks.length ? textFromBlocks(blocks) : (scope.innerText || '').trim();
       if (!text) text = (scope.textContent || '').replace(/\s+/g, ' ').trim();
       if (!text) { toast('这里没有可朗读的内容'); return; }
-      state.scopeEl = scope;
-      state.hlCache = null;
+      setScope(scope, 'generic');
       let offset = offsetOfLineAtPoint(e.clientX, e.clientY, blocks, d);
       if (offset === null || offset === undefined) offset = offsetOfBlockAtPoint(e.clientX, e.clientY, blocks, d);
       if (offset === null || offset === undefined) offset = 0;
@@ -2343,13 +2351,12 @@
     e.preventDefault();
     e.stopPropagation();
     if (sel.length > 1) {
-      state.scopeEl = null;
+      setScope(null, 'selection');
       play(sel, '选中内容');
       return;
     }
     const scope = scopeOfTurn(turn);
-    state.scopeEl = scope;
-    state.hlCache = null;
+    setScope(scope, 'turn');
     const blocks = collectBlocks(scope);
     const text = blocks.length ? textFromBlocks(blocks) : textOfTurn(turn);
     let offset = offsetOfLineAtPoint(e.clientX, e.clientY, blocks, d);
