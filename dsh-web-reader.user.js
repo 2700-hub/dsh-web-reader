@@ -1295,7 +1295,9 @@
     state.index = c;
     state.progress = chunk.from;
     state.current = chunk.text;
-    resetHlSearch('local');
+    // 不要在这里归零搜索位置：localPlay 每换一段都会被调用，
+    // 归零会让重复词匹配到前面的代码块（同一轮朗读必须单调前进）。
+    // 归零由 playTextFrom / seekTo / replayCurrent / resumeLast 负责。
     render();
     setLoading(true, chunk.text.length);
     localAudioFor(c, token);
