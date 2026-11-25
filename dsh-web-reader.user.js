@@ -533,6 +533,8 @@
       synth: !!(synth.speaking || synth.pending),
       local: !!state.localAudio,
       playing: state.playing,
+      paused: state.paused,
+      mode: state.playing ? (state.paused ? 'paused' : 'playing') : 'idle',
       kind: state.playKind,
     };
   };
@@ -973,14 +975,26 @@
   // 提前排 2 段（当前 + 前方 1 段）：既不断句，改语速时等一两段就生效
   const LOOKAHEAD = 2;
 
+  // 唯一的播放状态写入口：idle / playing / paused 三选一。
+  // 以前 playing 和 paused 被十几处各自赋值，才出现了"暂停但没在播"这种非法组合。
+  // 这里不 render：调用方各自决定状态栏文案。
+  function setPlayback(mode) {
+    const prev = state.playing ? (state.paused ? 'paused' : 'playing') : 'idle';
+    if (prev === mode) return;
+    state.playing = mode !== 'idle';
+    state.paused = mode === 'paused';
+    if (mode === 'paused') state.pausedAt = Date.now();
+    else state.pausedAt = 0;
+    autoLog('playback', { from: prev, to: mode });
+  }
+
   function stop() {
     // 没在播就别 cancel：cancel() 会把语音引擎打回未初始化状态，
     // 下一次开口要多等几百毫秒——这正是"点了朗读要等一下"的主要来源。
     const wasActive = state.playing || synth.speaking || synth.pending;
     localStop();
     state.gen += 1;
-    state.playing = false;
-    state.paused = false;
+    setPlayback('idle');
     state.chunks = [];
     state.index = 0;
     state.progress = 0;
@@ -999,8 +1013,7 @@
 
   function finish() {
     localStop();
-    state.playing = false;
-    state.paused = false;
+    setPlayback('idle');
     state.current = null;
     state.index = state.chunks.length;
     state.progress = state.sentences.length;
@@ -1212,8 +1225,7 @@
     state.localToken = token;
     const chunk = state.chunks[c];
     if (!chunk) { finish(); return; }
-    state.playing = true;
-    state.paused = false;
+    setPlayback('playing');
     state.index = c;
     state.progress = chunk.from;
     state.current = chunk.text;
@@ -1326,8 +1338,7 @@
     state.index = 0;
     state.progress = idx;
     state.queued = 0;
-    state.playing = true;
-    state.paused = false;
+    setPlayback('playing');
     state.warned = false;
     state.current = null;
     render();
@@ -1422,10 +1433,10 @@
     // 本地语音模式：直接控制 Audio 元素
     if (state.local && state.localAudio) {
       if (state.paused) {
-        state.paused = false;
+        setPlayback('playing');
         state.localAudio.play().catch(() => {});
       } else {
-        state.paused = true;
+        setPlayback('paused');
         state.localAudio.pause();
         startPausedHlLoop();
       }
@@ -1441,8 +1452,7 @@
     }
     if (state.paused) {
       const pausedFor = Date.now() - (state.pausedAt || 0);
-      state.paused = false;
-      state.pausedAt = 0;
+      setPlayback('playing');
 
       if (pausedFor > LONG_PAUSE_MS) {
         hardResume('已从当前段恢复');
@@ -1465,8 +1475,7 @@
       }, 1000);
     } else {
       synth.pause();
-      state.paused = true;
-      state.pausedAt = Date.now();
+      setPlayback('paused');
       state.autoScrollAt = Date.now();
       clearTimeout(state.scrollTimer);
       startPausedHlLoop();
@@ -1919,8 +1928,7 @@
       state.index = 0;
       state.queued = 0;
       state.boundary = null;
-      state.playing = true;
-      state.paused = false;
+      setPlayback('playing');
       render();
       setTimeout(() => { if (gen === state.gen) fillQueue(gen); }, 60);
       toast(msg);
