@@ -29,6 +29,11 @@
     ? GM_info.script.version
     : LOCAL_VERSION;
 
+  // 当前脚本管理器（ScriptCat / Tampermonkey / Violentmonkey …），用于更新提示文案
+  const SCRIPT_HANDLER = (typeof GM_info !== 'undefined' && GM_info && GM_info.scriptHandler)
+    ? String(GM_info.scriptHandler)
+    : '';
+
   // 更新检查：拉取仓库 main 上的脚本，比对 @version
   const UPDATE_URL = 'https://raw.githubusercontent.com/2700-hub/dsh-web-reader/main/dsh-web-reader.user.js';
   // raw 有 CDN 缓存（几分钟）；API 读的是当前 main 的真实内容，用于「立刻」检查
@@ -1793,7 +1798,8 @@
     function showUpdateLink(remote) {
       const a = root.querySelector('.dshr-update-link');
       if (!a) return;
-      a.href = UPDATE_URL + '?t=' + Date.now();
+      // 不要带 ?t= 之类的查询参数：脚本管理器靠 .user.js 结尾的 URL 拦截安装
+      a.href = UPDATE_URL;
       a.textContent = '安装 v' + remote;
       a.style.display = '';
     }
@@ -1819,14 +1825,14 @@
       try {
         const remote = await fetchRemoteVersion();
         if (compareVersions(remote, SCRIPT_VERSION) > 0) {
-          toast('发现 v' + remote + '，正在打开安装页…');
-          // 用户手势后几秒内 window.open 通常放行；被拦截时退化为面板里的链接
-          const win = window.open(UPDATE_URL, '_blank', 'noopener');
+          const who = SCRIPT_HANDLER || '脚本管理器';
+          toast('发现 v' + remote + '，交给' + who + '打开安装页…');
           markReloadPending();
-          if (!win) {
-            showUpdateLink(remote);
-            toast('发现 v' + remote + '，点面板里的「安装」');
-          }
+          // 打开 .user.js：ScriptCat / Tampermonkey 会拦截并弹安装页。
+          // 不要用 noopener——那样 window.open 返回 null，代码会误判成"被拦截"。
+          window.open(UPDATE_URL, '_blank');
+          // 兜底：新标签被拦或没弹安装页时，点面板里的链接
+          showUpdateLink(remote);
         } else {
           toast('已是最新版本 v' + SCRIPT_VERSION + '（远程 ' + remote + '）');
         }
