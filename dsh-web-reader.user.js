@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.21.6
+// @version      1.21.7
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.21.6';
+  const LOCAL_VERSION = '1.21.7';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -1555,8 +1555,13 @@
       const elapsed = (performance.now() - b.at) / 1000;
       const est = Math.min(chunk.text.length - 1, Math.floor(b.char + elapsed * rate));
       if (est <= (state.bndLast || 0)) return;
-      // 有 boundary 时只小幅领先；完全没有 boundary 的音色，1.5 秒后按估算走
-      const lead = b.sawBoundary ? 4 : (elapsed > 1.5 ? 999 : 8);
+      // 有 boundary 时只小幅领先；事件很稀疏或接近段尾时放宽，保证能跟上
+      const nearEnd = chunk.text.length - b.char <= 10;
+      const sparse = elapsed > 0.8; // 距离上次事件超过 0.8 秒，说明这个音色报得稀
+      // 完全没有 boundary 的音色，1.5 秒后按估算走
+      const lead = b.sawBoundary
+        ? (nearEnd ? 999 : (sparse ? 10 : 4))
+        : (elapsed > 1.5 ? 999 : 8);
       if (est > b.char + lead) return;
       state.bndLast = est;
       queueCharHighlight(state.scopeEl, chunk.text, est);

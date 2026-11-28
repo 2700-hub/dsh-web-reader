@@ -79,6 +79,8 @@ for (let i = 0; i < 140; i += 1) {
       boundaryCount: window.__dshState.boundaryCount || 0,
       boundaryAt: window.__dshState.boundary ? window.__dshState.boundary.charIndex : null,
       chunkIdx: window.__dshState.index,
+      chunkLen: window.__dshState.chunks[window.__dshState.index]
+        ? window.__dshState.chunks[window.__dshState.index].text.length : null,
       hlLen: window.__dshState.hlChunk ? window.__dshState.hlChunk.index : null,
       searchPos: window.__dshState.hlSearchPos,
       boxTop: r ? Math.round(r.top) : null,
@@ -95,7 +97,7 @@ for (let i = 0; i < 140; i += 1) {
 console.log('样本数:', samples.length);
 for (const s of samples) {
   console.log(`t=${String(s.ms).padStart(5)}ms playing=${s.playing ? 1 : 0} speaking=${s.speaking ? 1 : 0} `
-    + `boundary=${s.boundaryCount} char=${s.boundaryAt} chunk=${s.chunkIdx} hl=${s.hlLen} `
+    + `boundary=${s.boundaryCount} char=${s.boundaryAt} chunk=${s.chunkIdx}/${s.chunkLen} hl=${s.hlLen} `
     + `searchPos=${s.searchPos} box=${s.boxTop},${s.boxLeft} trace=${s.trace} calls=${s.perf ? s.perf.calls : '-'} maxMs=${s.perf ? Math.round(s.perf.maxMs) : '-'}`);
 }
 
