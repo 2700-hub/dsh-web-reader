@@ -12,7 +12,20 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = fs.readFileSync(path.join(root, 'dsh-web-reader.user.js'), 'utf8');
-const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+
+// 优先用日常浏览器 Edge，找不到再退回 Chrome；可用 E2E_BROWSER 覆盖
+const BROWSER_CANDIDATES = [
+  process.env.E2E_BROWSER,
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+].filter(Boolean);
+const CHROME = BROWSER_CANDIDATES.find((p) => fs.existsSync(p));
+if (!CHROME) {
+  console.error('找不到可用的 Edge/Chrome，可用 E2E_BROWSER 指定路径');
+  process.exit(1);
+}
+console.log('浏览器: ' + CHROME);
 const URL = process.env.DSH_URL || 'http://127.0.0.1:3080';
 
 const results = [];
