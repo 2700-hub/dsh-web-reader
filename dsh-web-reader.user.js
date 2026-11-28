@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.20.0
+// @version      1.21.0
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.20.0';
+  const LOCAL_VERSION = '1.21.0';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -251,6 +251,30 @@
     return blocks.map((b) => b.text).join('\n');
   }
 
+  // 多元素版：一条回答可能被拆成多个行（assistant-step 夹着 tool-call），
+  // 这里把它们的块按 DOM 顺序拼起来，start 是相对整段文本的全局偏移。
+  function collectBlocksMulti(els) {
+    const out = [];
+    let base = 0;
+    for (const el of els) {
+      const blocks = collectBlocks(el);
+      if (blocks.length) {
+        for (const b of blocks) out.push({ el: b.el, text: b.text, start: base + b.start });
+        const last = blocks[blocks.length - 1];
+        base += last.start + last.text.length + 1;
+      } else {
+        const t = (el.innerText || '').trim();
+        if (t) out.push({ el, text: t, start: base });
+        base += t.length + 1;
+      }
+    }
+    return out;
+  }
+
+  function textOfEls(els) {
+    return textFromBlocks(collectBlocksMulti(els));
+  }
+
   /* ---------------- 自动朗读：判定逻辑（纯函数，单测覆盖） ---------------- */
 
   // 把 data-chat-turn 的值去重、排序、丢掉非法值
@@ -298,11 +322,22 @@
     return Array.prototype.slice.call(document.querySelectorAll('[data-chat-turn="' + turn + '"]'));
   }
 
-  function answerElOf(turn) {
+  // 新版（dsh 0.2.2）把一条回答拆成多个 assistant-step 行，中间夹着 tool-call，
+  // 且删掉了 data-turn-process-answer。所以"回答"是一组元素，不是单个容器。
+  function answerElsOf(turn) {
     const rows = autoRows(turn);
-    for (const r of rows) if (r.hasAttribute('data-turn-process-answer')) return r;
-    for (const r of rows) if (r.getAttribute('data-chat-flow-kind') === 'assistant') return r;
-    return null; // 找不到明确回答容器就不读——宁可漏读，也不猜
+    const out = [];
+    for (const r of rows) {
+      const k = r.getAttribute('data-chat-flow-kind');
+      if (k === 'assistant' || k === 'assistant-step') out.push(r);
+    }
+    return out;
+  }
+
+  // 只要一个锚点时用这个（续读、保存位置）
+  function answerElOf(turn) {
+    const els = answerElsOf(turn);
+    return els.length ? els[0] : null;
   }
 
   // dsh 只在一轮结束时渲染 [data-turn-tail]，且只有结束时才带 data-actions-reveal
@@ -324,7 +359,7 @@
       stop();
     }
     // 高亮和自动滚动都挂在 scopeEl 上：手动朗读会设，自动朗读也必须设，否则没有高亮
-    state.scopeEl = el || null;
+    state.scopeEl = Array.isArray(el) ? el : (el ? [el] : []);
     state.hlCache = null;
     autoLog('play', { turn, textLen: text.length });
     play(text, '自动朗读', 'auto');
@@ -352,7 +387,8 @@
   function saveResume() {
     if (!state.playing) return;
     const scope = state.scopeEl;
-    const turnEl = scope && scope.closest ? scope.closest('[data-chat-turn]') : null;
+    const first = Array.isArray(scope) ? scope[0] : scope;
+    const turnEl = first && first.closest ? first.closest('[data-chat-turn]') : null;
     const turnId = turnEl ? Number(turnEl.getAttribute('data-chat-turn')) : 0;
     if (!turnId || !state.sentences.length) return;
     state.resume = {
@@ -379,14 +415,14 @@
   function resumeLast() {
     const r = state.resume;
     if (!r) { toast('没有可续读的内容'); return; }
-    const el = answerElOf(r.turn);
-    if (!el) {
+    const els = answerElsOf(r.turn);
+    if (!els.length) {
       toast('找不到上次的内容，可能已被清理');
       state.resume = null;
       updateResumeUI();
       return;
     }
-    state.scopeEl = el;
+    state.scopeEl = els;
     state.hlCache = null;
     state.sentences = r.sentences.slice();
     const idx = Math.max(0, Math.min(r.index, r.sentences.length - 1));
@@ -465,16 +501,16 @@
         continue; // 还在生成，下次扫描再看
       }
       state.autoWaitLogged.delete(turn);
-      const el = answerElOf(turn);
-      if (!el) {
+      const els = answerElsOf(turn);
+      if (!els.length) {
         autoLog('no-answer', { turn });
         continue; // 回答容器还没渲染出来，下次再看
       }
-      const text = textOfEl(el);
-      autoLog('ready', { turn, textLen: text.length, playing: state.playing });
+      const text = textOfEls(els);
+      autoLog('ready', { turn, textLen: text.length, playing: state.playing, segs: els.length });
       if (!shouldAutoRead(text)) { state.autoSeen.add(turn); autoLog('skip-empty', { turn }); continue; }
       state.autoSeen.add(turn); // 只读一次
-      enqueueAuto(turn, text, el);
+      enqueueAuto(turn, text, els);
     }
   }
 
@@ -559,13 +595,14 @@
     const sEl = document.querySelector('[data-conversation-session]');
     const boxes = Array.from(document.querySelectorAll('.dshr-play-hl'));
     const scope = state.scopeEl;
+    const firstScope = Array.isArray(scope) ? scope[0] : scope;
     return {
       session: sEl ? (sEl.getAttribute('data-conversation-session') || '') : '',
       playing: state.playing,
       paused: state.paused,
       synth: !!(synth.speaking || synth.pending),
       local: !!state.localAudio,
-      scopeConnected: !!(scope && scope.isConnected),
+      scopeConnected: !!(firstScope && firstScope.isConnected),
       boxes: boxes.length,
       boxDisplay: boxes.length ? (boxes[0].style.display || '') : '',
       index: state.index,
@@ -723,15 +760,20 @@
 
   function buildHlCache(scopeEl) {
     if (!scopeEl) return null;
+    const els = Array.isArray(scopeEl) ? scopeEl : [scopeEl];
+    if (!els.length) return null;
     const nodes = [];
     let raw = '';
-    const walker = document.createTreeWalker(scopeEl, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-      const t = node.textContent || '';
-      if (!t) continue;
-      nodes.push({ node, start: raw.length, len: t.length });
-      raw += t;
+    for (const el of els) {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        const t = node.textContent || '';
+        if (!t) continue;
+        nodes.push({ node, start: raw.length, len: t.length });
+        raw += t;
+      }
+      raw += '\n'; // 与 textFromBlocks 的段间分隔对齐；norm 会去掉空白
     }
     if (!raw) return null;
     let norm = '';
@@ -816,7 +858,7 @@
       // 滚动动画结束后再定位一次，高亮框才不会被留在旧位置（只定位，不再滚）
       clearTimeout(state.scrollTimer);
       state.scrollTimer = setTimeout(() => {
-        if (state.playing && state.hlChunk && state.scopeEl && !state.paused) {
+        if (state.playing && state.hlChunk && state.scopeEl && state.scopeEl.length && !state.paused) {
           highlightChar(state.scopeEl, state.hlChunk.text, state.hlChunk.index, { noScroll: true });
         }
       }, 420);
@@ -834,8 +876,9 @@
 
   function highlightChar(scopeEl, chunkText, charIndex, opts) {
     const t0 = performance.now();
-    if (!scopeEl || !chunkText) { hlTrace('no-input'); return; }
-    const cache = ensureCache(scopeEl);
+    const els = Array.isArray(scopeEl) ? scopeEl : (scopeEl ? [scopeEl] : []);
+    if (!els.length || !chunkText) { hlTrace('no-input'); return; }
+    const cache = ensureCache(els);
     if (!cache) { hlTrace('no-cache'); return; }
     try {
       let ci = Math.max(0, Math.min(charIndex, chunkText.length - 1));
@@ -862,7 +905,7 @@
       const a = locatePos(cache, startRaw);
       const b = locatePos(cache, endRaw);
       if (!a || !b) { hlTrace('locate-fail'); return; }
-      const doc = docOf(scopeEl);
+      const doc = docOf(els[0]);
       // 代码块整块高亮：逐字定位在重复词上会乱跳，而且代码超过 400 字会被
       // 截断成「…」，那个字符在 DOM 里不存在，逐字永远找不到位置。
       const preEl = a.node.parentElement && a.node.parentElement.closest
@@ -1168,7 +1211,7 @@
       const frac = Math.min(1, audio.currentTime / dur);
       const span = (chunk.to != null ? chunk.to : chunk.from + 1) - chunk.from;
       state.progress = chunk.from + frac * span;
-      if (state.scopeEl) {
+      if (state.scopeEl && state.scopeEl.length) {
         const exact = charIndexAt(c, chunk, audio.currentTime * 1000);
         const ci = exact != null ? exact : Math.floor(frac * chunk.text.length);
         highlightChar(state.scopeEl, chunk.text, Math.min(chunk.text.length - 1, ci));
@@ -1286,7 +1329,7 @@
       state.progress = chunk.from;
       state.current = chunk.text;
       state.boundary = null;
-      if (state.scopeEl) {
+      if (state.scopeEl && state.scopeEl.length) {
         // 不要在这里重置 hlSearchPos：每段都从全文开头找，重复词就会跳回前一段。
         // 位置只在"新开一次朗读 / 跳转 / 重读"时归零（stop、seekTo、replayCurrent）。
         queueCharHighlight(state.scopeEl, chunk.text, 0);
@@ -1305,7 +1348,7 @@
       const frac = chunk.text.length ? Math.min(1, Math.max(0, ev.charIndex / chunk.text.length)) : 0;
       state.progress = chunk.from + frac * span;
       render();
-      if (state.scopeEl) queueCharHighlight(state.scopeEl, chunk.text, ev.charIndex);
+      if (state.scopeEl && state.scopeEl.length) queueCharHighlight(state.scopeEl, chunk.text, ev.charIndex);
     };
 
     u.onend = () => {
@@ -1443,7 +1486,7 @@
   function startPausedHlLoop() {
     if (pausedHlTimer) return;
     pausedHlTimer = setInterval(() => {
-      if (!state.paused || !state.hlChunk || !state.scopeEl) {
+      if (!state.paused || !state.hlChunk || !state.scopeEl || !state.scopeEl.length) {
         clearInterval(pausedHlTimer);
         pausedHlTimer = 0;
         return;
@@ -2331,7 +2374,7 @@
       let text = blocks.length ? textFromBlocks(blocks) : (scope.innerText || '').trim();
       if (!text) text = (scope.textContent || '').replace(/\s+/g, ' ').trim();
       if (!text) { toast('这里没有可朗读的内容'); return; }
-      state.scopeEl = scope;
+      state.scopeEl = [scope];
       state.hlCache = null;
       let offset = offsetOfLineAtPoint(e.clientX, e.clientY, blocks, d);
       if (offset === null || offset === undefined) offset = offsetOfBlockAtPoint(e.clientX, e.clientY, blocks, d);
@@ -2347,10 +2390,11 @@
       play(sel, '选中内容');
       return;
     }
-    const scope = scopeOfTurn(turn);
+    const els = answerElsOf(turn);
+    const scope = els.length ? els : [turn];
     state.scopeEl = scope;
     state.hlCache = null;
-    const blocks = collectBlocks(scope);
+    const blocks = collectBlocksMulti(scope);
     const text = blocks.length ? textFromBlocks(blocks) : textOfTurn(turn);
     let offset = offsetOfLineAtPoint(e.clientX, e.clientY, blocks, d);
     if (offset === null || offset === undefined) offset = offsetOfBlockAtPoint(e.clientX, e.clientY, blocks, d);
@@ -2388,8 +2432,9 @@
   // 所属文档滚动了，重新定位当前字
   let hlScrollTick = null;
   function handlePageScroll(doc) {
-    if (!state.playing || !state.hlChunk || !state.scopeEl) return;
-    if ((state.scopeEl.ownerDocument || document) !== doc) return;
+    if (!state.playing || !state.hlChunk || !state.scopeEl || !state.scopeEl.length) return;
+    const first = state.scopeEl[0];
+    if ((first.ownerDocument || document) !== doc) return;
     if (hlScrollTick) return;
     hlScrollTick = requestAnimationFrame(() => {
       hlScrollTick = null;

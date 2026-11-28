@@ -31,6 +31,38 @@ git push --follow-tags origin main
 
 ---
 
+## [1.21.0] - 2026-11-28
+
+### 变更
+
+- **适配 dsh 0.2.2 的新聊天 DOM**：一条回答不再是一个容器，而是多个
+  `data-chat-flow-kind="assistant-step"` 行，中间夹着 `tool-call`
+- 新增 `answerElsOf()`：按 DOM 顺序收集一条回答的所有 `assistant-step` 行
+- 新增 `collectBlocksMulti()` / `textOfEls()`：多元素拼成整段文本，偏移是全局的
+- `buildHlCache()` / `highlightChar()` 支持多元素作用域，高亮可以跨行定位
+
+### 修复
+
+- 自动朗读失效：旧版依赖 `data-turn-process-answer` 找回答容器，0.2.2 删掉了这个属性
+- 手动朗读只能读几句：旧版只能对单个元素取文本，新版回答跨多行，需要拼接
+
+### 技术说明
+
+dsh 0.2.2-rc.5（2026-11-25 安装）把聊天行拆得更细：一轮 = `user` + `turn-process`
+\+ 若干 `assistant-step` / `tool-call` + `turn-tail`。`data-chat-turn`、`data-turn-tail`、
+`data-actions-reveal` 都还在，唯独 `data-turn-process-answer` 被删——所以"完成判定"
+没坏，"回答是谁"坏了。
+
+改法是把"作用域"从单元素改成元素数组：
+- 文本：各段 `collectBlocks` 后按顺序拼接，段间用 `\n`（norm 时会去掉）
+- 高亮：缓存把所有段的文本节点串起来，偏移映射回具体节点，定位到哪个节点就在哪个段里画
+- 续读：记住的第一个段的 `data-chat-turn` 仍能找回整轮
+
+教训：**DOM 契约要写进注释和探针，升级时先跑 `__dshAutoProbe()`**。
+这次就是靠它发现 `hasAnswerAttr: false`、`kinds` 里只有 `assistant-step`。
+
+---
+
 ## [1.20.2] - 2026-11-25
 
 ### 变更
