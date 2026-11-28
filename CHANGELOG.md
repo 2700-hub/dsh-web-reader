@@ -31,6 +31,29 @@ git push --follow-tags origin main
 
 ---
 
+## [1.21.4] - 2026-11-28
+
+### 变更
+
+- `stop()` 里对 `speechSynthesis`：暂停状态下先 `resume()` 再 `cancel()`；120ms 后补一次 `cancel()`
+- 快捷键增加 `keyup` 兜底，`keydown` / `keyup` 300ms 内只处理一次（防重复）
+
+### 修复
+
+- `Alt+X` 有时停不下朗读：Chromium/Edge 在**暂停状态**或**在线音色**（如云健）下
+  `cancel()` 可能不生效；现在先恢复再取消，并延迟补一次
+- 输入法组合过程中 `keydown` 可能被吞，`keyup` 兜底
+
+### 技术说明
+
+这是已知的 Chromium 行为：`speechSynthesis.cancel()` 在 paused 时不保证清空队列，
+在线自然音色首次取消也可能被忽略。补第二次 cancel 是最低风险的兜底。
+
+自动验收用的是假引擎，能验证"调用了 stop"，验证不了"真实音色停没停"——
+这条仍需人耳确认。
+
+---
+
 ## [1.21.3] - 2026-11-28
 
 ### 变更

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.21.3
+// @version      1.21.4
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.21.3';
+  const LOCAL_VERSION = '1.21.4';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -1078,7 +1078,17 @@
     state.hlSearchPos = 0;
     clearPlayHighlight();
     if (wasActive) {
-      synth.cancel();
+      try {
+        // 暂停状态下 cancel() 在 Chromium 里可能无效，先 resume 再取消
+        if (synth.paused) synth.resume();
+        synth.cancel();
+      } catch (err) { /* 忽略 */ }
+      // 在线音色（如 Edge 的云健）偶尔第一次 cancel 不生效，稍后再补一次
+      setTimeout(() => {
+        if (!state.playing) {
+          try { synth.cancel(); } catch (err) { /* 忽略 */ }
+        }
+      }, 120);
       autoLog('stop', {});
     }
     render('就绪 · Alt+点击任意消息朗读');
@@ -2473,6 +2483,9 @@
     if (is('x')) {
       e.__dshKeyHandled = true;
       e.preventDefault();
+      // keydown 和 keyup 都会进来，300ms 内只处理一次
+      if (Date.now() - (state.lastKeyStopAt || 0) < 300) return;
+      state.lastKeyStopAt = Date.now();
       autoLog('key', { code, key: k, action: 'stop' });
       stop();
     } else if (is('r')) {
@@ -2505,6 +2518,8 @@
     if (win) {
       // 窗口级 capture：抢在页面自己的快捷键/编辑器之前处理 Alt+X
       win.addEventListener('keydown', handleKey, true);
+      // 输入法组合期间 keydown 可能被吞，keyup 兜底
+      win.addEventListener('keyup', handleKey, true);
       win.addEventListener('blur', () => hideHighlight(doc));
       ['wheel', 'touchstart'].forEach((evt) => {
         win.addEventListener(evt, () => handleUserScroll(win), { passive: true, capture: true });
