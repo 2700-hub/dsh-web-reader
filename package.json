@@ -7,7 +7,9 @@
     "test": "node --test",
     "test:watch": "node --test --watch",
     "e2e": "node tools/e2e/auto-read.mjs",
-    "e2e:stop": "node tools/e2e/stop-headed.mjs"
+    "e2e:stop": "node tools/e2e/stop-headed.mjs",
+    "e2e:hl": "node tools/e2e/hl-headed.mjs",
+    "e2e:update": "node tools/e2e/update-headed.mjs"
   },
   "engines": {
     "node": ">=20"

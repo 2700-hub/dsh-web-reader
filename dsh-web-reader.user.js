@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.21.5
+// @version      1.21.6
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.21.5';
+  const LOCAL_VERSION = '1.21.6';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -1066,6 +1066,7 @@
     // 下一次开口要多等几百毫秒——这正是"点了朗读要等一下"的主要来源。
     const wasActive = state.playing || synth.speaking || synth.pending;
     localStop();
+    stopBndLoop();
     state.gen += 1;
     setPlayback('idle');
     state.chunks = [];
@@ -1099,6 +1100,7 @@
 
   function finish() {
     localStop();
+    stopBndLoop();
     setPlayback('idle');
     state.current = null;
     state.index = state.chunks.length;
@@ -1349,6 +1351,9 @@
       state.progress = chunk.from;
       state.current = chunk.text;
       state.boundary = null;
+      state.bnd = { i, char: 0, at: performance.now(), rate: 0, sawBoundary: false };
+      state.bndLast = 0;
+      startBndLoop();
       if (state.scopeEl && state.scopeEl.length) {
         // 不要在这里重置 hlSearchPos：每段都从全文开头找，重复词就会跳回前一段。
         // 位置只在"新开一次朗读 / 跳转 / 重读"时归零（stop、seekTo、replayCurrent）。
@@ -1362,13 +1367,25 @@
       if (gen !== state.gen) return;
       state.boundaryCount = (state.boundaryCount || 0) + 1;
       if (typeof ev.charIndex !== 'number') return;
+      const now = performance.now();
+      const prev = state.bnd;
+      // 用相邻两次 boundary 的间隔校准语速（字/秒）
+      let rate = 0;
+      if (prev && prev.i === i && ev.charIndex > prev.char) {
+        const dt = (now - prev.at) / 1000;
+        if (dt > 0.05) rate = (ev.charIndex - prev.char) / dt;
+      }
+      state.bnd = { i, char: ev.charIndex, at: now, rate: rate || (prev && prev.rate) || 0, sawBoundary: true };
+      // boundary 可能落后于插值已经画到的位置：只前进不后退
+      const target = Math.max(state.bndLast || 0, ev.charIndex);
+      state.bndLast = target;
       state.boundary = { i, charIndex: ev.charIndex };
       // 段内也推进进度条，否则一段几百字走完条都不动
       const span = (chunk.to != null ? chunk.to : chunk.from + 1) - chunk.from;
       const frac = chunk.text.length ? Math.min(1, Math.max(0, ev.charIndex / chunk.text.length)) : 0;
       state.progress = chunk.from + frac * span;
       render();
-      if (state.scopeEl && state.scopeEl.length) queueCharHighlight(state.scopeEl, chunk.text, ev.charIndex);
+      if (state.scopeEl && state.scopeEl.length) queueCharHighlight(state.scopeEl, chunk.text, target);
     };
 
     u.onend = () => {
@@ -1517,6 +1534,35 @@
     }, 120);
   }
 
+  // 两个 boundary 事件之间按语速插值，让高亮连续走，而不是一格一格跳。
+  // 有些音色（尤其在线自然音色）boundary 很稀疏，甚至只在一段开头报一次。
+  let bndTimer = 0;
+  function stopBndLoop() {
+    clearInterval(bndTimer);
+    bndTimer = 0;
+    state.bnd = null;
+  }
+  function startBndLoop() {
+    if (bndTimer) return;
+    bndTimer = setInterval(() => {
+      if (!state.playing || state.paused) return;
+      const b = state.bnd;
+      if (!b) return;
+      const chunk = state.chunks[b.i];
+      if (!chunk || b.i !== state.index) return;
+      if (!state.scopeEl || !state.scopeEl.length) return;
+      const rate = Math.min(12, b.rate > 0 ? b.rate : 4 * (state.rate || 1)); // 字/秒
+      const elapsed = (performance.now() - b.at) / 1000;
+      const est = Math.min(chunk.text.length - 1, Math.floor(b.char + elapsed * rate));
+      if (est <= (state.bndLast || 0)) return;
+      // 有 boundary 时只小幅领先；完全没有 boundary 的音色，1.5 秒后按估算走
+      const lead = b.sawBoundary ? 4 : (elapsed > 1.5 ? 999 : 8);
+      if (est > b.char + lead) return;
+      state.bndLast = est;
+      queueCharHighlight(state.scopeEl, chunk.text, est);
+    }, 120);
+  }
+
   function togglePause() {
     // 本地语音模式：直接控制 Audio 元素
     if (state.local && state.localAudio) {
@@ -1548,6 +1594,7 @@
       }
 
       synth.resume();
+      if (state.bnd) state.bnd.at = performance.now(); // 别把暂停时长算进插值
       render();
       // 部分浏览器要连按两次 resume 才动
       setTimeout(() => {
