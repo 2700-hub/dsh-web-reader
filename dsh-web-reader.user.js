@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.21.4
+// @version      1.21.5
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.21.4';
+  const LOCAL_VERSION = '1.21.5';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -1086,7 +1086,10 @@
       // 在线音色（如 Edge 的云健）偶尔第一次 cancel 不生效，稍后再补一次
       setTimeout(() => {
         if (!state.playing) {
-          try { synth.cancel(); } catch (err) { /* 忽略 */ }
+          try {
+            synth.cancel();
+            if (synth.paused) synth.resume(); // 别把引擎留在暂停态，否则下次不出声
+          } catch (err) { /* 忽略 */ }
         }
       }, 120);
       autoLog('stop', {});
@@ -1390,6 +1393,8 @@
       else fillQueue(gen);
     };
 
+    // 引擎可能被"暂停后停止"留在 paused，先恢复再开口
+    if (synth.paused) { try { synth.resume(); } catch (err) { /* 忽略 */ } }
     synth.speak(u);
   }
 

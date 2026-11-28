@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node --test",
     "test:watch": "node --test --watch",
-    "e2e": "node tools/e2e/auto-read.mjs"
+    "e2e": "node tools/e2e/auto-read.mjs",
+    "e2e:stop": "node tools/e2e/stop-headed.mjs"
   },
   "engines": {
     "node": ">=20"
