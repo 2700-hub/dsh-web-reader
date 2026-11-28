@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         dsh web 朗读
 // @namespace    local.dsh.reader
-// @version      1.21.2
+// @version      1.21.3
 // @description  dsh web 回复朗读：连续播、语速、可拖动进度条、Alt+点哪儿从哪儿读
 // @match        *://*/*
 // @run-at       document-start
@@ -24,7 +24,7 @@
   if (window.top !== window.self) return;
 
   // 版本号：优先读管理器提供的 GM_info，拿不到再用本地常量
-  const LOCAL_VERSION = '1.21.2';
+  const LOCAL_VERSION = '1.21.3';
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version)
     ? GM_info.script.version
     : LOCAL_VERSION;
@@ -2465,19 +2465,23 @@
 
   function handleKey(e) {
     if (!e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.__dshKeyHandled) return; // window 和 document 都挂了监听，别处理两次
     // 用 e.code：Windows 上 Alt+X 的 e.key 不一定是 'x'（可能是特殊字符）
     const code = e.code || '';
     const k = String(e.key || '').toLowerCase();
     const is = (letter) => code === 'Key' + letter.toUpperCase() || k === letter;
     if (is('x')) {
+      e.__dshKeyHandled = true;
       e.preventDefault();
       autoLog('key', { code, key: k, action: 'stop' });
       stop();
     } else if (is('r')) {
+      e.__dshKeyHandled = true;
       e.preventDefault();
       autoLog('key', { code, key: k, action: 'replay' });
       replayCurrent();
     } else if (is('p')) {
+      e.__dshKeyHandled = true;
       e.preventDefault();
       autoLog('key', { code, key: k, action: 'panel' });
       togglePanel();
@@ -2499,6 +2503,8 @@
     }, true);
     const win = doc.defaultView;
     if (win) {
+      // 窗口级 capture：抢在页面自己的快捷键/编辑器之前处理 Alt+X
+      win.addEventListener('keydown', handleKey, true);
       win.addEventListener('blur', () => hideHighlight(doc));
       ['wheel', 'touchstart'].forEach((evt) => {
         win.addEventListener(evt, () => handleUserScroll(win), { passive: true, capture: true });

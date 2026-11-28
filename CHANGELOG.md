@@ -31,6 +31,30 @@ git push --follow-tags origin main
 
 ---
 
+## [1.21.3] - 2026-11-28
+
+### 变更
+
+- `Alt+X` / `Alt+R` / `Alt+P` 改为**窗口级 capture 监听**，抢在页面快捷键和编辑器之前处理
+- 同一个按键事件加去重标记，window 和 document 两处监听不会重复执行
+- e2e 支持从 `E2E_URL` / `DSH_URL` 或 `~/.dsh/e2e-url.txt` 读带 token 的真实地址
+
+### 修复
+
+- 焦点在输入框里时 `Alt+X` 可能被页面或编辑器吞掉、停不下朗读；窗口级监听先于页面处理
+- e2e 新增「焦点在 textarea 里按 Alt+X」用例，现在 10/10 通过
+
+### 技术说明
+
+无头浏览器直接开 `http://127.0.0.1:3080` 会落到鉴权页
+（`dsh web authentication required`），里面的合成节点能测逻辑，但测不到真实输入框。
+把 `dsh web` 打印的带 token 地址存进 `~/.dsh/e2e-url.txt`，e2e 就会打开真应用。
+
+`Alt+X` 这类全局快捷键，尽量挂在 `window` 的 capture 阶段：document 层的监听
+可能被页面自己的 handler 或编辑器提前 stop 掉。
+
+---
+
 ## [1.21.2] - 2026-11-28
 
 ### 变更

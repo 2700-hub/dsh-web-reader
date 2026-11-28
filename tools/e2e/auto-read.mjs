@@ -26,7 +26,16 @@ if (!CHROME) {
   process.exit(1);
 }
 console.log('浏览器: ' + CHROME);
-const URL = process.env.DSH_URL || 'http://127.0.0.1:3080';
+// 真实应用需要带 token 的地址：优先 E2E_URL / DSH_URL，其次读 ~/.dsh/e2e-url.txt
+let URL = process.env.E2E_URL || process.env.DSH_URL || '';
+if (!URL) {
+  try {
+    const f = path.join(process.env.USERPROFILE || '', '.dsh', 'e2e-url.txt');
+    if (fs.existsSync(f)) URL = fs.readFileSync(f, 'utf8').trim();
+  } catch (err) { /* 忽略 */ }
+}
+if (!URL) URL = 'http://127.0.0.1:3080';
+console.log('页面: ' + URL.replace(/token=[^&]+/i, 'token=***'));
 
 const results = [];
 function check(name, ok, detail) {
@@ -48,7 +57,7 @@ await context.addInitScript(() => {
       window.__spoken.push(String((u && u.text) || ''));
       // 模拟真实引擎：先 onstart，再 onend，让播放队列能继续往下走
       setTimeout(() => { try { u.onstart && u.onstart({}); } catch (err) { /* 忽略 */ } }, 1);
-      setTimeout(() => { try { u.onend && u.onend({}); } catch (err) { /* 忽略 */ } }, 8);
+      setTimeout(() => { try { u.onend && u.onend({}); } catch (err) { /* 忽略 */ } }, 400);
     },
     cancel() {},
     pause() {},
@@ -126,6 +135,54 @@ const dbg = await page.evaluate(() => ({
 }));
 check('朗读文本包含两段回答', spokenAuto.includes('alpha') && spokenAuto.includes('beta'), spokenAuto.slice(0, 80) + ' | ' + JSON.stringify(dbg).slice(0, 160));
 check('朗读文本不含工具输出', !spokenAuto.includes('tool output'), '');
+
+// ---- Alt+X 停止 ----
+async function altClick(id) {
+  await page.evaluate((pid) => {
+    const el = document.getElementById(pid);
+    const r = el.getBoundingClientRect();
+    el.dispatchEvent(new MouseEvent('click', {
+      bubbles: true, cancelable: true, altKey: true,
+      clientX: Math.round(r.left + 4), clientY: Math.round(r.top + 4),
+    }));
+  }, id);
+}
+
+await page.evaluate(() => { const b = document.querySelector('[data-act="stop"]'); if (b) b.click(); });
+await page.waitForTimeout(300);
+
+await altClick('e2e-p1');
+await page.waitForTimeout(150);
+const playingBeforeX = await page.evaluate(() => window.__dshState.playing);
+await page.keyboard.press('Alt+x');
+await page.waitForTimeout(250);
+const afterX = await page.evaluate(() => ({
+  playing: window.__dshState.playing,
+  key: [...window.__dshAutoLog].reverse().find((e) => e.event === 'key') || null,
+}));
+check('Alt+X 能停止朗读', playingBeforeX === true && afterX.playing === false,
+  JSON.stringify({ before: playingBeforeX, after: afterX }));
+
+// 焦点在输入框里时
+await altClick('e2e-p1');
+await page.waitForTimeout(150);
+const editable = await page.evaluate(() => {
+  let el = document.querySelector('[contenteditable]:not([contenteditable="false"])');
+  if (!el) {
+    el = document.createElement('textarea');
+    el.id = 'e2e-editor';
+    el.style.cssText = 'position:fixed;left:10px;top:10px;width:200px;height:40px;z-index:10';
+    document.body.appendChild(el);
+  }
+  el.focus();
+  return document.activeElement === el;
+});
+const playingBeforeX2 = await page.evaluate(() => window.__dshState.playing);
+await page.keyboard.press('Alt+x');
+await page.waitForTimeout(250);
+const afterX2 = await page.evaluate(() => ({ playing: window.__dshState.playing }));
+check('输入框聚焦时 Alt+X 也能停止', playingBeforeX2 === true && afterX2.playing === false,
+  JSON.stringify({ editable, before: playingBeforeX2, after: afterX2 }));
 
 // 手动 Alt+点击第二段：应从该段开始，且能读完整条（含另一段）
 await page.evaluate(() => {
