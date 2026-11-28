@@ -5,9 +5,13 @@
   "description": "dsh web 朗读 userscript（单文件分发，纯函数用 Node 内置测试跑）",
   "scripts": {
     "test": "node --test",
-    "test:watch": "node --test --watch"
+    "test:watch": "node --test --watch",
+    "e2e": "node tools/e2e/auto-read.mjs"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.65.1"
   }
 }

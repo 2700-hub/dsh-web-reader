@@ -330,7 +330,9 @@
   // 新版（dsh 0.2.2）把一条回答拆成多个 assistant-step 行，中间夹着 tool-call，
   // 且删掉了 data-turn-process-answer。所以"回答"是一组元素，不是单个容器。
   function answerElsOf(turn) {
-    const rows = autoRows(turn);
+    // 允许传回合号，也允许传回合元素
+    const id = turn && turn.getAttribute ? turn.getAttribute('data-chat-turn') : turn;
+    const rows = autoRows(id);
     const out = [];
     for (const r of rows) {
       const k = r.getAttribute('data-chat-flow-kind');
